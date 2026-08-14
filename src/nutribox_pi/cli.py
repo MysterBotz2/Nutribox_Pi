@@ -7,6 +7,7 @@ import json
 import sys
 from collections.abc import Sequence
 
+from nutribox_pi import __version__
 from nutribox_pi.adapters import (
     BackendError,
     SimulatedTemperatureSensor,
@@ -15,14 +16,30 @@ from nutribox_pi.adapters import (
 )
 from nutribox_pi.config import ConfigurationError, Settings
 from nutribox_pi.controller import NutriBoxController
+from nutribox_pi.diagnostics import DiagnosticsService, format_human_report
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nutribox-pi")
-    parser.add_subparsers(dest="command", required=True).add_parser(
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser(
         "health", help="check the v1 backend health endpoint"
     )
+    diagnostics_parser = subparsers.add_parser(
+        "diagnostics", help="run safe device diagnostics"
+    )
+    diagnostics_parser.add_argument(
+        "--json", action="store_true", help="emit machine-readable JSON"
+    )
     args = parser.parse_args(argv)
+
+    if args.command == "diagnostics":
+        report = _diagnostics_service().run()
+        if args.json:
+            print(json.dumps(report.as_dict(), sort_keys=True))
+        else:
+            print(format_human_report(report))
+        return 0 if report.passed else 1
 
     try:
         settings = Settings.from_env()
@@ -46,4 +63,15 @@ def _controller(settings: Settings) -> NutriBoxController:
         temperature_sensor=SimulatedTemperatureSensor(
             settings.simulated_temperature_c
         ),
+    )
+
+
+def _diagnostics_service() -> DiagnosticsService:
+    return DiagnosticsService(
+        configuration_loader=Settings.from_env,
+        backend_factory=lambda settings: V1BackendClient(
+            settings.api_base_url,
+            timeout_seconds=settings.http_timeout_seconds,
+        ),
+        application_version=__version__,
     )

@@ -8,6 +8,9 @@ backend health-check CLI.
 See [docs/PI0_SCOPE.md](docs/PI0_SCOPE.md) for the binding scope and unresolved
 requirements.
 
+For manual Raspberry Pi setup and device diagnostics, see
+[docs/PI1_DEPLOYMENT.md](docs/PI1_DEPLOYMENT.md).
+
 ## Development
 
 Requires Python 3.11 or newer.
