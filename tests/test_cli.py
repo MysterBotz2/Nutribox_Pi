@@ -11,6 +11,7 @@ from nutribox_pi.diagnostics import (
     DiagnosticReport,
 )
 from nutribox_pi.models import HealthResult
+from nutribox_pi.touchscreen import TouchscreenCheckResult
 
 
 class FakeController:
@@ -153,3 +154,23 @@ def test_cli_camera_capture_missing_configuration_is_safe(
         "code": "invalid_configuration",
         "message": "Camera configuration is invalid.",
     }
+
+
+@pytest.mark.parametrize(
+    ("result", "expected_exit"),
+    [
+        (TouchscreenCheckResult(True, "Touchscreen check passed."), 0),
+        (TouchscreenCheckResult(False, "Touchscreen check exited."), 1),
+        (TouchscreenCheckResult(False, "Touchscreen check unavailable."), 1),
+    ],
+)
+def test_cli_touchscreen_check_exit_codes(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    result: TouchscreenCheckResult,
+    expected_exit: int,
+) -> None:
+    monkeypatch.setattr(cli, "run_touchscreen_check", lambda: result)
+
+    assert cli.main(["touchscreen-check"]) == expected_exit
+    assert capsys.readouterr().out == f"{result.message}\n"

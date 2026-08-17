@@ -34,4 +34,4 @@ def test_hardware_validation_template_has_complete_smoke_workflow() -> None:
     assert "stat -c '%a'" in template
     assert "rm .camera-smoke/pi1b-smoke.jpg" in template
     assert "rmdir .camera-smoke" in template
-    assert "Picamera2 version or `unknown` | |" in template
+    assert "Picamera2 version or `unknown` |" in template

@@ -20,3 +20,4 @@ def test_all_pi0_modules_import_without_raspberry_pi_packages() -> None:
 
     assert "picamera2" not in sys.modules
     assert "libcamera" not in sys.modules
+    assert "pygame" not in sys.modules

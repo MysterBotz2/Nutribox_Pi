@@ -15,6 +15,7 @@ from nutribox_pi.adapters import (
     SimulatedWeightSensor,
     V1BackendClient,
 )
+from nutribox_pi.adapters.pygame_touchscreen import run_touchscreen_check
 from nutribox_pi.camera_diagnostics import (
     CameraDiagnosticsService,
     capture_as_dict,
@@ -49,7 +50,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     camera_capture_parser.add_argument("output")
     camera_capture_parser.add_argument("--overwrite", action="store_true")
     camera_capture_parser.add_argument("--json", action="store_true")
+    subparsers.add_parser(
+        "touchscreen-check", help="run the local touchscreen smoke test"
+    )
     args = parser.parse_args(argv)
+
+    if args.command == "touchscreen-check":
+        result = run_touchscreen_check()
+        print(result.message)
+        return 0 if result.ok else 1
 
     if args.command == "camera-check":
         report = CameraDiagnosticsService(camera_from_env()).run()
