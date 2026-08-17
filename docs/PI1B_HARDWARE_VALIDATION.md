@@ -40,16 +40,16 @@ address, token, credential, or raw exception.
 
 | Allowed field | Result |
 | --- | --- |
-| OS codename | |
-| Architecture | |
-| Python version | |
-| Sanitized Picamera2 version or `unknown` | |
-| Sanitized libcamera version or `unknown` | |
-| Sensor family, such as IMX708 | |
-| Camera-check pass/fail | |
-| Capture pass/fail | |
-| Encoded width | |
-| Encoded height | |
-| No-overwrite pass/fail | |
-| Overwrite pass/fail | |
-| Cleanup confirmation | |
+| OS codename | trixie |
+| Architecture | aarch64 |
+| Python version | 3.13.5 |
+| Sanitized Picamera2 version or `unknown` | 0.3.37 |
+| Sanitized libcamera version or `unknown` | 0.7.1+rpt20260609 |
+| Sensor family, such as IMX708 | IMX708 |
+| Camera-check pass/fail | PASS |
+| Capture pass/fail | PASS |
+| Encoded width | 1920 |
+| Encoded height | 1080 |
+| No-overwrite pass/fail | PASS |
+| Overwrite pass/fail | PASS |
+| Cleanup confirmation | PASS |
