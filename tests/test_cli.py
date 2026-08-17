@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -99,3 +100,56 @@ def test_cli_diagnostics_json_output_and_failure_exit(
     payload = json.loads(capsys.readouterr().out)
     assert payload["passed"] is False
     assert payload["device"]["hostname"] == "nutribox-device"
+
+
+def test_cli_camera_check_does_not_require_backend(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("NUTRIBOX_API_BASE_URL", raising=False)
+    monkeypatch.setenv("NUTRIBOX_CAMERA_ADAPTER", "simulated")
+
+    assert cli.main(["camera-check", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["command"] == "camera-check"
+
+
+def test_cli_camera_capture_exact_json(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("NUTRIBOX_API_BASE_URL", raising=False)
+    monkeypatch.setenv("NUTRIBOX_CAMERA_ADAPTER", "simulated")
+    output = tmp_path / "meal.jpg"
+
+    assert cli.main(["camera-capture", str(output), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "command": "camera-capture",
+        "ok": True,
+        "code": "ok",
+        "message": "Image captured.",
+        "file_name": "meal.jpg",
+        "format": "jpeg",
+        "width": 1920,
+        "height": 1080,
+    }
+
+
+def test_cli_camera_capture_missing_configuration_is_safe(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("NUTRIBOX_CAMERA_ADAPTER", raising=False)
+    output = tmp_path / "secret-name.jpg"
+
+    assert cli.main(["camera-capture", str(output), "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "command": "camera-capture",
+        "ok": False,
+        "code": "invalid_configuration",
+        "message": "Camera configuration is invalid.",
+    }

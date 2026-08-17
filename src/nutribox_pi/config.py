@@ -17,6 +17,26 @@ class ConfigurationError(ValueError):
     """Raised when PI-0 configuration is invalid."""
 
 
+class CameraConfigurationError(ValueError):
+    """Raised when camera-only configuration is invalid."""
+
+
+@dataclass(frozen=True, slots=True)
+class CameraSettings:
+    adapter: str
+
+    def __post_init__(self) -> None:
+        if self.adapter not in {"simulated", "picamera2"}:
+            raise CameraConfigurationError("camera adapter is invalid")
+
+    @classmethod
+    def from_env(cls) -> CameraSettings:
+        adapter = os.getenv("NUTRIBOX_CAMERA_ADAPTER")
+        if not adapter:
+            raise CameraConfigurationError("camera adapter is required")
+        return cls(adapter=adapter)
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     api_base_url: str

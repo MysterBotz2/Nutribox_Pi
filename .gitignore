@@ -4,6 +4,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .venv/
+.venv-pi/
+/.camera-smoke/
 .env
 build/
 dist/

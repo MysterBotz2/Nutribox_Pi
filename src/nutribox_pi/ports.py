@@ -5,7 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
-from nutribox_pi.models import AnalysisResult, HealthResult
+from nutribox_pi.models import (
+    AnalysisResult,
+    CameraAvailability,
+    CaptureResult,
+    HealthResult,
+)
 
 
 class WeightSensor(Protocol):
@@ -21,3 +26,10 @@ class Backend(Protocol):
 
     def analyze_meal(self, image_path: Path, weight_grams: float) -> AnalysisResult: ...
 
+
+class Camera(Protocol):
+    def availability(self) -> CameraAvailability: ...
+
+    def capture(
+        self, output_path: Path, overwrite: bool = False
+    ) -> CaptureResult: ...

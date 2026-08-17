@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
 from nutribox_pi import __version__
 from nutribox_pi.adapters import (
@@ -14,6 +15,13 @@ from nutribox_pi.adapters import (
     SimulatedWeightSensor,
     V1BackendClient,
 )
+from nutribox_pi.camera_diagnostics import (
+    CameraDiagnosticsService,
+    capture_as_dict,
+    format_camera_capture,
+    format_camera_check,
+)
+from nutribox_pi.camera_factory import camera_from_env
 from nutribox_pi.config import ConfigurationError, Settings
 from nutribox_pi.controller import NutriBoxController
 from nutribox_pi.diagnostics import DiagnosticsService, format_human_report
@@ -31,7 +39,37 @@ def main(argv: Sequence[str] | None = None) -> int:
     diagnostics_parser.add_argument(
         "--json", action="store_true", help="emit machine-readable JSON"
     )
+    camera_check_parser = subparsers.add_parser(
+        "camera-check", help="run local camera diagnostics"
+    )
+    camera_check_parser.add_argument("--json", action="store_true")
+    camera_capture_parser = subparsers.add_parser(
+        "camera-capture", help="capture one JPEG image"
+    )
+    camera_capture_parser.add_argument("output")
+    camera_capture_parser.add_argument("--overwrite", action="store_true")
+    camera_capture_parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
+
+    if args.command == "camera-check":
+        report = CameraDiagnosticsService(camera_from_env()).run()
+        print(
+            json.dumps(report.as_dict(), sort_keys=True)
+            if args.json
+            else format_camera_check(report)
+        )
+        return 0 if report.ok else 1
+
+    if args.command == "camera-capture":
+        result = camera_from_env().capture(
+            Path(args.output), overwrite=args.overwrite
+        )
+        print(
+            json.dumps(capture_as_dict(result), sort_keys=True)
+            if args.json
+            else format_camera_capture(result)
+        )
+        return 0 if result.ok else 1
 
     if args.command == "diagnostics":
         report = _diagnostics_service().run()

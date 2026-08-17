@@ -1,5 +1,6 @@
 import importlib
 import pkgutil
+import sys
 
 import nutribox_pi
 
@@ -16,3 +17,6 @@ def test_all_pi0_modules_import_without_raspberry_pi_packages() -> None:
         if module_name == "nutribox_pi.__main__":
             continue
         importlib.import_module(module_name)
+
+    assert "picamera2" not in sys.modules
+    assert "libcamera" not in sys.modules
