@@ -157,7 +157,7 @@ class StubPicamera:
     def cancel_all_and_flush(self) -> None:
         pass
 
-    def capture_file(self, path: str) -> None:
+    def capture_file(self, path: str, format: str | None = None) -> None:
         Path(path).write_bytes(synthetic_jpeg())
 
     def stop(self) -> None:
@@ -166,6 +166,62 @@ class StubPicamera:
     def close(self) -> None:
         if self.close_fails:
             raise RuntimeError("secret cleanup")
+
+
+def test_capture_file_receives_tmp_staging_path_and_explicit_jpeg_format(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class CaptureRecording(StubPicamera):
+        capture_arguments: tuple[str, str | None] | None = None
+
+        def capture_file(self, path: str, format: str | None = None) -> None:
+            type(self).capture_arguments = (path, format)
+            super().capture_file(path, format=format)
+
+    clock = iter([0.0, 0.0, 1.0])
+    adapter = Picamera2Camera(monotonic=lambda: next(clock))
+    monkeypatch.setattr(
+        adapter,
+        "_load_stack",
+        lambda: (CaptureRecording, LIBCAMERA, ("1.0", "2.0")),
+    )
+    destination = tmp_path / "meal.jpg"
+
+    result = adapter.capture(destination)
+
+    assert result.ok is True
+    assert CaptureRecording.capture_arguments is not None
+    staging_raw, image_format = CaptureRecording.capture_arguments
+    staging = Path(staging_raw)
+    assert staging.parent == destination.parent
+    assert staging != destination
+    assert staging.suffix == ".tmp"
+    assert image_format == "jpeg"
+
+
+def test_capture_file_failure_remains_normalized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class CaptureFailureCamera(StubPicamera):
+        def capture_file(self, path: str, format: str | None = None) -> None:
+            raise ValueError("secret staging extension failure")
+
+    clock = iter([0.0, 0.0, 1.0])
+    adapter = Picamera2Camera(monotonic=lambda: next(clock))
+    monkeypatch.setattr(
+        adapter,
+        "_load_stack",
+        lambda: (CaptureFailureCamera, LIBCAMERA, ("1.0", "2.0")),
+    )
+    destination = tmp_path / "meal.jpg"
+
+    result = adapter.capture(destination)
+
+    assert result.code is CameraCode.CAPTURE_FAILED
+    assert result.message == "Camera capture failed."
+    assert result.published is False
+    assert not destination.exists()
+    assert not list(tmp_path.glob(".nutribox-camera-*.tmp"))
 
 
 def test_enumeration_exception_has_exact_mapping(

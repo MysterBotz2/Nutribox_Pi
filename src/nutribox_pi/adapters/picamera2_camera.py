@@ -115,7 +115,7 @@ class Picamera2Camera(SafeCameraAdapter):
 
             self._autofocus(camera)
             try:
-                camera.capture_file(str(staging))
+                camera.capture_file(str(staging), format="jpeg")
             except Exception as exc:
                 raise CaptureFailure(CameraCode.CAPTURE_FAILED) from exc
         except BaseException as exc:
