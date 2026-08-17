@@ -15,6 +15,7 @@ from nutribox_pi.adapters import (
     SimulatedWeightSensor,
     V1BackendClient,
 )
+from nutribox_pi.adapters.pygame_device_ui import run_device_ui
 from nutribox_pi.adapters.pygame_touchscreen import run_touchscreen_check
 from nutribox_pi.camera_diagnostics import (
     CameraDiagnosticsService,
@@ -53,7 +54,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     subparsers.add_parser(
         "touchscreen-check", help="run the local touchscreen smoke test"
     )
+    subparsers.add_parser("ui", help="run the local meal-capture interface")
     args = parser.parse_args(argv)
+
+    if args.command == "ui":
+        result = run_device_ui()
+        print(result.message)
+        return 0 if result.ok else 1
 
     if args.command == "touchscreen-check":
         result = run_touchscreen_check()

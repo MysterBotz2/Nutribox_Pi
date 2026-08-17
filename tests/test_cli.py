@@ -5,6 +5,7 @@ import pytest
 
 from nutribox_pi import cli
 from nutribox_pi.adapters.v1_backend import BackendError
+from nutribox_pi.device_ui import UIResult
 from nutribox_pi.diagnostics import (
     DeviceInformation,
     DiagnosticCheck,
@@ -173,4 +174,30 @@ def test_cli_touchscreen_check_exit_codes(
     monkeypatch.setattr(cli, "run_touchscreen_check", lambda: result)
 
     assert cli.main(["touchscreen-check"]) == expected_exit
+    assert capsys.readouterr().out == f"{result.message}\n"
+
+
+@pytest.mark.parametrize(
+    ("result", "expected_exit"),
+    [
+        (UIResult(True, "Nutri-Box UI closed."), 0),
+        (UIResult(False, "The Nutri-Box display is unavailable."), 1),
+        (UIResult(False, "Temporary image cleanup failed."), 1),
+    ],
+)
+def test_cli_device_ui_exit_codes_without_backend_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    result: UIResult,
+    expected_exit: int,
+) -> None:
+    monkeypatch.delenv("NUTRIBOX_API_BASE_URL", raising=False)
+    monkeypatch.setattr(cli, "run_device_ui", lambda: result)
+    monkeypatch.setattr(
+        cli,
+        "_controller",
+        lambda settings: pytest.fail("UI must not construct a backend"),
+    )
+
+    assert cli.main(["ui"]) == expected_exit
     assert capsys.readouterr().out == f"{result.message}\n"
