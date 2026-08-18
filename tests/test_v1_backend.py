@@ -247,3 +247,24 @@ def test_analyze_rejects_invalid_typed_response(
             "https://backend.test",
             session=FakeSession(FakeResponse(payload)),  # type: ignore[arg-type]
         ).analyze_meal(image, 10)
+
+
+def test_nutrition_reference_not_found_accepts_recognized_food_object(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "recognized_foods": [{"name": "chicken adobo"}],
+        "recognition_source": "simulated",
+        "status": "nutrition_reference_not_found",
+    }
+    image = tmp_path / "meal.jpg"
+    image.write_bytes(b"jpeg")
+
+    result = V1BackendClient(
+        "https://backend.test",
+        session=FakeSession(FakeResponse(payload)),  # type: ignore[arg-type]
+    ).analyze_meal(image, 250)
+
+    assert isinstance(result, NutritionReferenceNotFoundResponse)
+    assert result.recognized_foods[0].name == "chicken adobo"
+    assert result.recognition_source.value == "simulated"

@@ -37,6 +37,7 @@ from nutribox_pi.models import (
     CameraCode,
     CaptureResult,
     HealthResult,
+    NutritionReferenceNotFoundResponse,
     NutritionValues,
     PreviewFrame,
     RecognitionSource,
@@ -381,6 +382,60 @@ def test_analysis_uses_controller_once_not_food_recognizer_and_cleans_image(
 def test_active_ui_sources_do_not_call_food_recognizer() -> None:
     source = Path("src/nutribox_pi/device_ui.py").read_text()
     assert "recognize_food(" not in source
+
+
+def test_nutrition_reference_result_flows_through_controller_workflow_and_ui(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class ReferenceMissingBackend(RecordingBackend):
+        def analyze_meal(
+            self, image_path: Path, weight_grams: float
+        ) -> NutritionReferenceNotFoundResponse:
+            self.calls.append((image_path, weight_grams))
+            return NutritionReferenceNotFoundResponse(
+                AnalysisStatus.NUTRITION_REFERENCE_NOT_FOUND,
+                (RecognizedFood("chicken adobo"),),
+                RecognitionSource.SIMULATED,
+            )
+
+    backend = ReferenceMissingBackend()
+    workflow = MealCaptureWorkflow(
+        SimulatedCamera(), _controller(backend), _store(tmp_path)
+    )
+    workflow.analyze()
+    workflow.begin_capture()
+    workflow.perform_capture()
+    image = workflow.review_image
+    assert image is not None
+    directory = image.parent
+
+    workflow.begin_analysis()
+    workflow.perform_analysis()
+
+    assert workflow.screen is UIScreen.NUTRITION_REFERENCE_NOT_FOUND
+    assert workflow.recognized_foods == (RecognizedFood("chicken adobo"),)
+    assert workflow.recognition_source is RecognitionSource.SIMULATED
+    assert not image.exists()
+    assert not directory.exists()
+
+    text: list[str] = []
+    monkeypatch.setattr(
+        pygame_device_ui,
+        "_draw_text",
+        lambda screen, font, value, center, color: text.append(value),
+    )
+    monkeypatch.setattr(pygame_device_ui, "_draw_card", lambda *args: None)
+    font = SimpleNamespace(size=lambda value: (len(value), 1))
+    pygame_device_ui._render_result(
+        SimpleNamespace(),
+        object(),
+        SimpleNamespace(subheading=font, body=font, small=font),
+        workflow,
+    )
+
+    assert "chicken adobo" in text
+    assert "No nutrition reference is available." in text
+    assert "Simulated recognition" in text
 
 
 def test_analyze_deletes_image_and_home_returns_home(tmp_path: Path) -> None:

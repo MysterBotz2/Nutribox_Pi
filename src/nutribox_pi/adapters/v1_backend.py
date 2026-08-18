@@ -83,15 +83,22 @@ class V1BackendClient:
             foods_payload = payload["recognized_foods"]
         except (KeyError, ValueError) as exc:
             raise BackendError("backend returned an invalid analysis response") from exc
-        if not isinstance(foods_payload, list) or any(
-            not isinstance(food, str) or not food.strip() for food in foods_payload
-        ):
+        if not isinstance(foods_payload, list):
             raise BackendError("backend returned an invalid analysis response")
+        foods: list[RecognizedFood] = []
+        for food in foods_payload:
+            if isinstance(food, str):
+                name = food
+            elif isinstance(food, dict):
+                name = food.get("name")
+            else:
+                raise BackendError("backend returned an invalid analysis response")
+            if not isinstance(name, str) or not name.strip():
+                raise BackendError("backend returned an invalid analysis response")
+            foods.append(RecognizedFood(name.strip()))
         common = {
             "status": status,
-            "recognized_foods": tuple(
-                RecognizedFood(food.strip()) for food in foods_payload
-            ),
+            "recognized_foods": tuple(foods),
             "recognition_source": recognition_source,
         }
         if status is AnalysisStatus.FOOD_NOT_RECOGNIZED:
