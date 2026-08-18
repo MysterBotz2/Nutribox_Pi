@@ -1,4 +1,4 @@
-"""Hardware-independent PI-1D local meal-capture workflow."""
+"""Hardware-independent PI-1D/PI-2A meal-capture and analysis workflow."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from nutribox_pi.controller import NutriBoxController
+from nutribox_pi.models import AnalysisStatus
 from nutribox_pi.ports import Camera
 from nutribox_pi.touchscreen import TouchRect
 
@@ -28,7 +30,18 @@ DANGER = (229, 57, 53)
 CAMERA_ERROR = "Unable to capture the meal image."
 CLEANUP_ERROR = "Temporary image cleanup failed."
 DISPLAY_ERROR = "The Nutri-Box display is unavailable."
+ANALYSIS_ERROR = "Meal analysis is unavailable."
 UI_CLOSED = "Nutri-Box UI closed."
+DEVELOPMENT_NOTICE = "Development mode: simulated weight"
+
+RESULT_MESSAGES = {
+    AnalysisStatus.CALCULATED: "Meal analysis completed.",
+    AnalysisStatus.FOOD_NOT_RECOGNIZED: "Food was not recognized.",
+    AnalysisStatus.REQUIRES_FOOD_SELECTION: "Food selection is required.",
+    AnalysisStatus.NUTRITION_REFERENCE_NOT_FOUND: (
+        "Nutrition reference was not found."
+    ),
+}
 
 
 class UIScreen(StrEnum):
@@ -36,15 +49,20 @@ class UIScreen(StrEnum):
     CAPTURE = "capture"
     CAPTURING = "capturing"
     REVIEW = "review"
+    ANALYZING = "analyzing"
+    CALCULATED = "calculated"
+    FOOD_NOT_RECOGNIZED = "food_not_recognized"
+    REQUIRES_FOOD_SELECTION = "requires_food_selection"
+    NUTRITION_REFERENCE_NOT_FOUND = "nutrition_reference_not_found"
     ERROR = "error"
 
 
 class UIAction(StrEnum):
     ANALYZE = "analyze"
+    ANALYZE_MEAL = "analyze_meal"
     CAPTURE = "capture"
     BACK = "back"
     RETAKE = "retake"
-    DONE = "done"
     RETRY = "retry"
     HOME = "home"
     EXIT = "exit"
@@ -103,7 +121,29 @@ def buttons_for(screen: UIScreen) -> tuple[ButtonLayout, ...]:
             ButtonLayout(
                 UIAction.RETAKE, "Retake", TouchRect(70, 394, 300, 66), "card"
             ),
-            ButtonLayout(UIAction.DONE, "Done", TouchRect(430, 394, 300, 66)),
+            ButtonLayout(
+                UIAction.ANALYZE_MEAL,
+                "Analyze Meal",
+                TouchRect(430, 394, 300, 66),
+            ),
+            EXIT_BUTTON,
+        )
+    if screen is UIScreen.ANALYZING:
+        return (
+            ButtonLayout(
+                UIAction.ANALYZE_MEAL,
+                "Analyzing...",
+                TouchRect(240, 318, 320, 88),
+                enabled=False,
+            ),
+            EXIT_BUTTON,
+        )
+    if screen in RESULT_SCREENS:
+        return (
+            ButtonLayout(
+                UIAction.RETAKE, "Retake", TouchRect(70, 330, 300, 76), "card"
+            ),
+            ButtonLayout(UIAction.HOME, "Home", TouchRect(430, 330, 300, 76)),
             EXIT_BUTTON,
         )
     return (
@@ -174,14 +214,30 @@ class TemporaryCaptureStore:
         return not failed
 
 
+STATUS_SCREENS = {
+    AnalysisStatus.CALCULATED: UIScreen.CALCULATED,
+    AnalysisStatus.FOOD_NOT_RECOGNIZED: UIScreen.FOOD_NOT_RECOGNIZED,
+    AnalysisStatus.REQUIRES_FOOD_SELECTION: UIScreen.REQUIRES_FOOD_SELECTION,
+    AnalysisStatus.NUTRITION_REFERENCE_NOT_FOUND: (
+        UIScreen.NUTRITION_REFERENCE_NOT_FOUND
+    ),
+}
+RESULT_SCREENS = frozenset(STATUS_SCREENS.values())
+
+
 class MealCaptureWorkflow:
     def __init__(
-        self, camera: Camera, store: TemporaryCaptureStore | None = None
+        self,
+        camera: Camera,
+        controller: NutriBoxController,
+        store: TemporaryCaptureStore | None = None,
     ) -> None:
         self._camera = camera
+        self._controller = controller
         self._store = store or TemporaryCaptureStore()
         self.screen = UIScreen.HOME
         self.error_message: str | None = None
+        self.result_message: str | None = None
 
     @property
     def review_image(self) -> Path | None:
@@ -189,6 +245,7 @@ class MealCaptureWorkflow:
 
     def analyze(self) -> None:
         self.error_message = None
+        self.result_message = None
         self.screen = UIScreen.CAPTURE
 
     def back(self) -> None:
@@ -197,6 +254,7 @@ class MealCaptureWorkflow:
 
     def begin_capture(self) -> None:
         self.error_message = None
+        self.result_message = None
         self.screen = UIScreen.CAPTURING
 
     def perform_capture(self) -> None:
@@ -218,14 +276,41 @@ class MealCaptureWorkflow:
             return
         self._fail_after_cleanup(CAMERA_ERROR)
 
+    def begin_analysis(self) -> None:
+        if self.screen is UIScreen.REVIEW:
+            self.error_message = None
+            self.result_message = None
+            self.screen = UIScreen.ANALYZING
+
+    def perform_analysis(self) -> None:
+        if self.screen is not UIScreen.ANALYZING:
+            return
+        image_path = self._store.image_path
+        if image_path is None:
+            self._fail_after_cleanup(ANALYSIS_ERROR)
+            return
+        result = None
+        failed = False
+        try:
+            result = self._controller.analyze_meal(image_path)
+        except Exception:
+            failed = True
+        finally:
+            cleaned = self._store.cleanup()
+        if not cleaned:
+            self.screen = UIScreen.ERROR
+            self.error_message = CLEANUP_ERROR
+            return
+        if failed or result is None:
+            self.screen = UIScreen.ERROR
+            self.error_message = ANALYSIS_ERROR
+            return
+        self.screen = STATUS_SCREENS[result.status]
+        self.result_message = RESULT_MESSAGES[result.status]
+
     def retake(self) -> None:
         if self._cleanup_or_error():
             self.screen = UIScreen.CAPTURE
-            self.error_message = None
-
-    def done(self) -> None:
-        if self._cleanup_or_error():
-            self.screen = UIScreen.HOME
             self.error_message = None
 
     def retry(self) -> None:

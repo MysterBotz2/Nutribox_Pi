@@ -1,4 +1,4 @@
-"""Lazy pygame renderer for the PI-1D local meal-capture UI."""
+"""Lazy pygame renderer for the PI-1D/PI-2A meal-analysis UI."""
 
 from __future__ import annotations
 
@@ -7,17 +7,21 @@ from contextlib import suppress
 from typing import Any
 
 from nutribox_pi.camera_factory import camera_from_env
+from nutribox_pi.controller import NutriBoxController
 from nutribox_pi.device_ui import (
+    ANALYSIS_ERROR,
     BACKGROUND,
     BORDER,
     CARD,
     DANGER,
+    DEVELOPMENT_NOTICE,
     DISPLAY_ERROR,
     DISPLAY_SIZE,
     ELEVATED_SURFACE,
     PRIMARY,
     PRIMARY_MUTED,
     PRIMARY_TEXT,
+    RESULT_SCREENS,
     SECONDARY_TEXT,
     UI_CLOSED,
     ButtonLayout,
@@ -40,6 +44,7 @@ REVIEW_BOUNDS = (620, 300)
 
 def run_device_ui(
     camera: Camera | None = None,
+    controller: NutriBoxController | None = None,
     *,
     pygame_module: Any | None = None,
     store: TemporaryCaptureStore | None = None,
@@ -69,7 +74,12 @@ def run_device_ui(
             body=pygame.font.Font(None, 28),
             button=pygame.font.Font(None, 32),
         )
-        workflow = MealCaptureWorkflow(camera or camera_from_env(), store)
+        if controller is None:
+            outcome = UIResult(False, ANALYSIS_ERROR)
+            return outcome
+        workflow = MealCaptureWorkflow(
+            camera or camera_from_env(), controller, store
+        )
         outcome = _run_loop(pygame, screen, fonts, workflow)
     except Exception:
         outcome = UIResult(False, DISPLAY_ERROR)
@@ -81,8 +91,6 @@ def run_device_ui(
     if not cleanup_result.ok:
         return cleanup_result
     return outcome
-
-
 class _Fonts:
     def __init__(
         self, *, heading: Any, subheading: Any, body: Any, button: Any
@@ -147,10 +155,14 @@ def _apply_action(
         pygame.event.pump()
         pygame.time.wait(80)
         workflow.perform_capture()
+    elif action is UIAction.ANALYZE_MEAL:
+        workflow.begin_analysis()
+        _render(pygame, screen, fonts, workflow, None)
+        pygame.event.pump()
+        pygame.time.wait(80)
+        workflow.perform_analysis()
     elif action is UIAction.RETAKE:
         workflow.retake()
-    elif action is UIAction.DONE:
-        workflow.done()
     elif action is UIAction.RETRY:
         workflow.retry()
     elif action is UIAction.HOME:
@@ -184,11 +196,25 @@ def _render(
         _render_capture(pygame, screen, fonts, workflow.screen)
     elif workflow.screen is UIScreen.REVIEW:
         _render_review(pygame, screen, fonts, workflow)
+    elif workflow.screen is UIScreen.ANALYZING:
+        _render_analyzing(pygame, screen, fonts)
+    elif workflow.screen in RESULT_SCREENS:
+        _render_result(pygame, screen, fonts, workflow)
     else:
         _render_error(pygame, screen, fonts, workflow.error_message)
     for button in buttons_for(workflow.screen):
         _draw_button(pygame, screen, fonts.button, button, pressed is button.action)
     pygame.display.flip()
+
+
+def _render_development_notice(screen: Any, fonts: _Fonts) -> None:
+    _draw_text(
+        screen,
+        fonts.body,
+        DEVELOPMENT_NOTICE,
+        (400, 455),
+        SECONDARY_TEXT,
+    )
 
 
 def _render_home(pygame: Any, screen: Any, fonts: _Fonts) -> None:
@@ -201,6 +227,7 @@ def _render_home(pygame: Any, screen: Any, fonts: _Fonts) -> None:
         (400, 213),
         SECONDARY_TEXT,
     )
+    _render_development_notice(screen, fonts)
 
 
 def _render_capture(
@@ -214,6 +241,7 @@ def _render_capture(
         else "Place the full meal inside the camera view, then tap Capture."
     )
     _draw_text(screen, fonts.body, message, (400, 212), SECONDARY_TEXT)
+    _render_development_notice(screen, fonts)
 
 
 def _render_review(
@@ -233,6 +261,34 @@ def _render_review(
     top = 72 + (REVIEW_BOUNDS[1] - target_size[1]) // 2
     _draw_card(pygame, screen, (80, 62, 640, 320))
     screen.blit(scaled, (left, top))
+
+
+def _render_analyzing(pygame: Any, screen: Any, fonts: _Fonts) -> None:
+    _draw_text(screen, fonts.heading, "Analyzing meal", (400, 120), PRIMARY_TEXT)
+    _draw_card(pygame, screen, (120, 165, 560, 110))
+    _draw_text(
+        screen,
+        fonts.body,
+        "Sending the meal image and simulated weight...",
+        (400, 220),
+        SECONDARY_TEXT,
+    )
+    _render_development_notice(screen, fonts)
+
+
+def _render_result(
+    pygame: Any, screen: Any, fonts: _Fonts, workflow: MealCaptureWorkflow
+) -> None:
+    _draw_text(screen, fonts.heading, "Meal analysis", (400, 115), PRIMARY_TEXT)
+    _draw_card(pygame, screen, (100, 165, 600, 110))
+    _draw_text(
+        screen,
+        fonts.body,
+        workflow.result_message or ANALYSIS_ERROR,
+        (400, 220),
+        SECONDARY_TEXT,
+    )
+    _render_development_notice(screen, fonts)
 
 
 def _render_error(

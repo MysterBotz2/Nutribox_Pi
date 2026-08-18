@@ -17,7 +17,8 @@ ENV_FILE="$PROJECT_DIR/.env"
 "$VENV_PYTHON" -c 'import nutribox_pi, pygame, picamera2' >/dev/null 2>&1 ||
     die ".venv-pi cannot import the project and OS-managed UI/camera support"
 
-if [ -z "${NUTRIBOX_CAMERA_ADAPTER:-}" ] && [ -f "$ENV_FILE" ]; then
+if { [ -z "${NUTRIBOX_CAMERA_ADAPTER:-}" ] ||
+    [ -z "${NUTRIBOX_API_BASE_URL:-}" ]; } && [ -f "$ENV_FILE" ]; then
     set -a
     # shellcheck disable=SC1090
     . "$ENV_FILE" || die "could not load .env"

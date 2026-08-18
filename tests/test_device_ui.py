@@ -1,23 +1,72 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from nutribox_pi.adapters import pygame_device_ui
+from nutribox_pi.adapters.mock_hardware import (
+    SimulatedTemperatureSensor,
+    SimulatedWeightSensor,
+)
 from nutribox_pi.adapters.simulated_camera import SimulatedCamera
+from nutribox_pi.adapters.v1_backend import BackendError
+from nutribox_pi.controller import NutriBoxController
 from nutribox_pi.device_ui import (
+    ANALYSIS_ERROR,
     CAMERA_ERROR,
+    CLEANUP_ERROR,
     DISPLAY_ERROR,
+    RESULT_MESSAGES,
+    STATUS_SCREENS,
     MealCaptureWorkflow,
     TemporaryCaptureStore,
+    UIAction,
     UIResult,
     UIScreen,
+    buttons_for,
     scaled_image_size,
 )
-from nutribox_pi.models import CameraCode, CaptureResult
+from nutribox_pi.models import (
+    AnalysisResult,
+    AnalysisStatus,
+    CameraCode,
+    CaptureResult,
+    HealthResult,
+)
+
+
+class RecordingBackend:
+    def __init__(
+        self,
+        status: AnalysisStatus = AnalysisStatus.CALCULATED,
+        error: BaseException | None = None,
+    ) -> None:
+        self.status = status
+        self.error = error
+        self.calls: list[tuple[Path, float]] = []
+
+    def health(self) -> HealthResult:
+        raise AssertionError("UI must not call backend health")
+
+    def analyze_meal(self, image_path: Path, weight_grams: float) -> AnalysisResult:
+        self.calls.append((image_path, weight_grams))
+        if self.error is not None:
+            raise self.error
+        return AnalysisResult(self.status, {"status": self.status.value})
+
+
+def _controller(
+    backend: RecordingBackend | None = None, weight: float = 250.0
+) -> NutriBoxController:
+    return NutriBoxController(
+        backend or RecordingBackend(),
+        SimulatedWeightSensor(weight),
+        SimulatedTemperatureSensor(),
+    )
 
 
 def _store(tmp_path: Path) -> TemporaryCaptureStore:
@@ -31,7 +80,9 @@ def _store(tmp_path: Path) -> TemporaryCaptureStore:
 
 
 def _captured_workflow(tmp_path: Path) -> MealCaptureWorkflow:
-    workflow = MealCaptureWorkflow(SimulatedCamera(), _store(tmp_path))
+    workflow = MealCaptureWorkflow(
+        SimulatedCamera(), _controller(), _store(tmp_path)
+    )
     workflow.analyze()
     workflow.begin_capture()
     workflow.perform_capture()
@@ -47,7 +98,7 @@ def test_home_capture_capturing_review_transition(tmp_path: Path) -> None:
             return super().capture(output_path, overwrite)
 
     camera = RecordingCamera()
-    workflow = MealCaptureWorkflow(camera, _store(tmp_path))
+    workflow = MealCaptureWorkflow(camera, _controller(), _store(tmp_path))
 
     assert workflow.screen is UIScreen.HOME
     workflow.analyze()
@@ -76,21 +127,26 @@ def test_retake_deletes_image_and_returns_to_capture(tmp_path: Path) -> None:
     assert not directory.exists()
 
 
-def test_done_deletes_image_and_returns_home(tmp_path: Path) -> None:
+def test_analyze_deletes_image_and_home_returns_home(tmp_path: Path) -> None:
     workflow = _captured_workflow(tmp_path)
     image = workflow.review_image
     assert image is not None
     directory = image.parent
 
-    workflow.done()
+    workflow.begin_analysis()
+    workflow.perform_analysis()
 
-    assert workflow.screen is UIScreen.HOME
+    assert workflow.screen is UIScreen.CALCULATED
     assert not image.exists()
     assert not directory.exists()
+    workflow.home()
+    assert workflow.screen is UIScreen.HOME
 
 
 def test_back_and_exit_are_clean(tmp_path: Path) -> None:
-    workflow = MealCaptureWorkflow(SimulatedCamera(), _store(tmp_path))
+    workflow = MealCaptureWorkflow(
+        SimulatedCamera(), _controller(), _store(tmp_path)
+    )
     workflow.analyze()
     workflow.back()
 
@@ -117,7 +173,9 @@ def test_camera_failure_is_normalized_and_retry_returns_to_capture(
                 None,
             )
 
-    workflow = MealCaptureWorkflow(FailingCamera(), _store(tmp_path))
+    workflow = MealCaptureWorkflow(
+        FailingCamera(), _controller(), _store(tmp_path)
+    )
     workflow.analyze()
     workflow.begin_capture()
     workflow.perform_capture()
@@ -129,12 +187,178 @@ def test_camera_failure_is_normalized_and_retry_returns_to_capture(
     assert workflow.screen is UIScreen.CAPTURE
 
 
+@pytest.mark.parametrize("status", list(AnalysisStatus))
+def test_analysis_status_uses_controller_boundary_weight_and_cleans_image(
+    tmp_path: Path, status: AnalysisStatus
+) -> None:
+    backend = RecordingBackend(status)
+    workflow = MealCaptureWorkflow(
+        SimulatedCamera(), _controller(backend, weight=321.5), _store(tmp_path)
+    )
+    workflow.analyze()
+    workflow.begin_capture()
+    workflow.perform_capture()
+    image = workflow.review_image
+    assert image is not None
+    directory = image.parent
+
+    workflow.begin_analysis()
+
+    assert workflow.screen is UIScreen.ANALYZING
+    assert backend.calls == []
+    workflow.perform_analysis()
+
+    assert workflow.screen is STATUS_SCREENS[status]
+    assert workflow.result_message == RESULT_MESSAGES[status]
+    assert backend.calls == [(image, 321.5)]
+    assert not image.exists()
+    assert not directory.exists()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        BackendError("request failed /secret"),
+        TimeoutError("timed out /secret"),
+        ValueError("invalid response /secret"),
+    ],
+)
+def test_analysis_failures_are_normalized_and_cleaned(
+    tmp_path: Path, failure: Exception
+) -> None:
+    workflow = MealCaptureWorkflow(
+        SimulatedCamera(),
+        _controller(RecordingBackend(error=failure)),
+        _store(tmp_path),
+    )
+    workflow.analyze()
+    workflow.begin_capture()
+    workflow.perform_capture()
+    image = workflow.review_image
+    assert image is not None
+    directory = image.parent
+
+    workflow.begin_analysis()
+    workflow.perform_analysis()
+
+    assert workflow.screen is UIScreen.ERROR
+    assert workflow.error_message == ANALYSIS_ERROR
+    assert "/secret" not in workflow.error_message
+    assert not image.exists()
+    assert not directory.exists()
+
+
+def test_analysis_cleanup_failure_overrides_success(tmp_path: Path) -> None:
+    class FailingAnalysisCleanupStore(TemporaryCaptureStore):
+        cleanup_calls = 0
+
+        def cleanup(self) -> bool:
+            self.cleanup_calls += 1
+            return False
+
+    store = FailingAnalysisCleanupStore()
+    image = tmp_path / "meal.jpg"
+    image.write_bytes(b"meal")
+    store._image = image
+    store._directory = tmp_path
+    workflow = MealCaptureWorkflow(SimulatedCamera(), _controller(), store)
+    workflow.screen = UIScreen.REVIEW
+
+    workflow.begin_analysis()
+    workflow.perform_analysis()
+
+    assert workflow.screen is UIScreen.ERROR
+    assert workflow.error_message == CLEANUP_ERROR
+    assert store.cleanup_calls == 1
+
+
+def test_analysis_cancellation_cleans_image_and_is_reraised(tmp_path: Path) -> None:
+    backend = RecordingBackend(error=KeyboardInterrupt())
+    workflow = MealCaptureWorkflow(
+        SimulatedCamera(), _controller(backend), _store(tmp_path)
+    )
+    workflow.analyze()
+    workflow.begin_capture()
+    workflow.perform_capture()
+    image = workflow.review_image
+    assert image is not None
+    directory = image.parent
+    workflow.begin_analysis()
+
+    with pytest.raises(KeyboardInterrupt):
+        workflow.perform_analysis()
+
+    assert not image.exists()
+    assert not directory.exists()
+
+
 def test_review_scaling_preserves_1920_by_1080_aspect_ratio() -> None:
     width, height = scaled_image_size((1920, 1080), (620, 300))
 
     assert (width, height) == (533, 300)
     assert width <= 620 and height <= 300
     assert width / height == pytest.approx(16 / 9, abs=0.002)
+
+
+def test_analyze_action_renders_visible_state_before_backend_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = RecordingBackend()
+    workflow = MealCaptureWorkflow(
+        SimulatedCamera(), _controller(backend), _store(tmp_path)
+    )
+    workflow.analyze()
+    workflow.begin_capture()
+    workflow.perform_capture()
+    rendered_states: list[UIScreen] = []
+    monkeypatch.setattr(
+        pygame_device_ui,
+        "_render",
+        lambda pygame, screen, fonts, active, pressed: rendered_states.append(
+            active.screen
+        ),
+    )
+    pygame = SimpleNamespace(
+        event=SimpleNamespace(pump=lambda: None),
+        time=SimpleNamespace(wait=lambda milliseconds: None),
+    )
+
+    pygame_device_ui._apply_action(
+        pygame, object(), object(), workflow, UIAction.ANALYZE_MEAL
+    )
+
+    assert rendered_states == [UIScreen.ANALYZING]
+    assert workflow.screen is UIScreen.CALCULATED
+    assert len(backend.calls) == 1
+
+
+def test_review_and_result_actions_match_pi2a_workflow() -> None:
+    review_labels = {button.label for button in buttons_for(UIScreen.REVIEW)}
+    assert "Analyze Meal" in review_labels
+    assert "Done" not in review_labels
+
+    for screen in STATUS_SCREENS.values():
+        labels = {button.label for button in buttons_for(screen)}
+        assert {"Home", "Retake", "Exit"} <= labels
+
+
+def test_ui_sources_have_no_direct_network_or_forbidden_contract_fields() -> None:
+    source = "\n".join(
+        Path(path).read_text()
+        for path in (
+            "src/nutribox_pi/device_ui.py",
+            "src/nutribox_pi/adapters/pygame_device_ui.py",
+        )
+    )
+
+    for forbidden in (
+        "requests",
+        "multipart",
+        "user_id",
+        "confidence",
+    ):
+        assert forbidden not in source
+    assert re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", source) is None
 
 
 class FakeScreen:
@@ -206,7 +430,7 @@ def test_ui_exception_cleans_temporary_capture_and_is_normalized(
     monkeypatch.setattr(pygame_device_ui, "_render", lambda *args: None)
 
     result = pygame_device_ui.run_device_ui(
-        SimulatedCamera(), pygame_module=pygame, store=store
+        SimulatedCamera(), _controller(), pygame_module=pygame, store=store
     )
 
     assert result == UIResult(False, DISPLAY_ERROR)
@@ -227,7 +451,7 @@ def test_ui_cancellation_cleans_temporary_capture_and_is_reraised(
 
     with pytest.raises(KeyboardInterrupt):
         pygame_device_ui.run_device_ui(
-            SimulatedCamera(), pygame_module=pygame, store=store
+            SimulatedCamera(), _controller(), pygame_module=pygame, store=store
         )
 
     assert not image.exists()
@@ -247,7 +471,7 @@ def test_quit_cleans_temporary_capture_without_backend_configuration(
     monkeypatch.setattr(pygame_device_ui, "_render", lambda *args: None)
 
     result = pygame_device_ui.run_device_ui(
-        SimulatedCamera(), pygame_module=pygame, store=store
+        SimulatedCamera(), _controller(), pygame_module=pygame, store=store
     )
 
     assert result.ok is True
@@ -269,7 +493,7 @@ def test_escape_cleans_temporary_capture(
     monkeypatch.setattr(pygame_device_ui, "_render", lambda *args: None)
 
     result = pygame_device_ui.run_device_ui(
-        SimulatedCamera(), pygame_module=pygame, store=store
+        SimulatedCamera(), _controller(), pygame_module=pygame, store=store
     )
 
     assert result.ok is True
@@ -287,6 +511,7 @@ def test_cleanup_failure_is_normalized(monkeypatch: pytest.MonkeyPatch) -> None:
 
     result = pygame_device_ui.run_device_ui(
         SimulatedCamera(),
+        _controller(),
         pygame_module=pygame,
         store=FailingCleanupStore(),
     )

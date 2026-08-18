@@ -26,6 +26,7 @@ from nutribox_pi.camera_diagnostics import (
 from nutribox_pi.camera_factory import camera_from_env
 from nutribox_pi.config import ConfigurationError, Settings
 from nutribox_pi.controller import NutriBoxController
+from nutribox_pi.device_ui import ANALYSIS_ERROR
 from nutribox_pi.diagnostics import DiagnosticsService, format_human_report
 
 
@@ -58,7 +59,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "ui":
-        result = run_device_ui()
+        try:
+            controller = _controller(Settings.from_env())
+        except (BackendError, ConfigurationError, ValueError):
+            print(ANALYSIS_ERROR)
+            return 1
+        result = run_device_ui(controller=controller)
         print(result.message)
         return 0 if result.ok else 1
 

@@ -185,19 +185,34 @@ def test_cli_touchscreen_check_exit_codes(
         (UIResult(False, "Temporary image cleanup failed."), 1),
     ],
 )
-def test_cli_device_ui_exit_codes_without_backend_configuration(
+def test_cli_device_ui_exit_codes(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     result: UIResult,
     expected_exit: int,
 ) -> None:
-    monkeypatch.delenv("NUTRIBOX_API_BASE_URL", raising=False)
-    monkeypatch.setattr(cli, "run_device_ui", lambda: result)
+    monkeypatch.setenv("NUTRIBOX_API_BASE_URL", "https://backend.test")
+    controller = FakeController()
+    monkeypatch.setattr(cli, "_controller", lambda settings: controller)
     monkeypatch.setattr(
         cli,
-        "_controller",
-        lambda settings: pytest.fail("UI must not construct a backend"),
+        "run_device_ui",
+        lambda *, controller: result,
     )
 
     assert cli.main(["ui"]) == expected_exit
     assert capsys.readouterr().out == f"{result.message}\n"
+
+
+def test_cli_device_ui_missing_backend_configuration_is_normalized(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("NUTRIBOX_API_BASE_URL", raising=False)
+    monkeypatch.setattr(
+        cli,
+        "run_device_ui",
+        lambda **kwargs: pytest.fail("UI must not start with invalid settings"),
+    )
+
+    assert cli.main(["ui"]) == 1
+    assert capsys.readouterr().out == "Meal analysis is unavailable.\n"
