@@ -35,8 +35,11 @@ from nutribox_pi.models import (
     AnalysisStatus,
     CameraCode,
     CaptureResult,
+    FoodRecognitionResult,
     HealthResult,
     PreviewFrame,
+    RecognitionSource,
+    RecognizedFood,
 )
 
 
@@ -58,6 +61,25 @@ class RecordingBackend:
         if self.error is not None:
             raise self.error
         return AnalysisResult(self.status, {"status": self.status.value})
+
+
+class RecordingRecognizer:
+    def __init__(
+        self,
+        foods: tuple[RecognizedFood, ...] = (RecognizedFood("Rice"),),
+        source: RecognitionSource = RecognitionSource.SIMULATED,
+        error: Exception | None = None,
+    ) -> None:
+        self.foods = foods
+        self.source = source
+        self.error = error
+        self.calls: list[Path] = []
+
+    def recognize_food(self, image_path: Path) -> FoodRecognitionResult:
+        self.calls.append(image_path)
+        if self.error is not None:
+            raise self.error
+        return FoodRecognitionResult(self.foods, self.source)
 
 
 def _controller(
@@ -252,6 +274,9 @@ def test_preview_loop_throttles_to_about_fifteen_fps(
     monkeypatch.setattr(
         pygame_device_ui.time, "monotonic", lambda: next(monotonic_values)
     )
+    monkeypatch.setattr(
+        pygame_device_ui._PreviewSurfaceCache, "update", lambda *args: None
+    )
     monkeypatch.setattr(pygame_device_ui, "_render", lambda *args: None)
 
     result = pygame_device_ui._run_loop(pygame, object(), object(), workflow)
@@ -259,6 +284,63 @@ def test_preview_loop_throttles_to_about_fifteen_fps(
     assert result.ok is True
     assert camera.sessions[0].frame_calls == 1
     assert waits == [67]
+
+
+def test_preview_cache_detaches_scales_once_and_persists() -> None:
+    class RawSurface:
+        def __init__(self) -> None:
+            self.copied = False
+
+        def copy(self) -> CachedSurface:
+            self.copied = True
+            return CachedSurface()
+
+    class CachedSurface:
+        def get_size(self) -> tuple[int, int]:
+            return 420, 236
+
+    raw = RawSurface()
+    scaled = CachedSurface()
+    scale_calls: list[tuple[object, tuple[int, int]]] = []
+    pygame = SimpleNamespace(
+        image=SimpleNamespace(frombuffer=lambda *args: raw),
+        transform=SimpleNamespace(
+            smoothscale=lambda surface, size: scale_calls.append((surface, size))
+            or scaled
+        ),
+    )
+    cache = pygame_device_ui._PreviewSurfaceCache()
+    frame = PreviewFrame(640, 360, bytes((1, 2, 3)) * (640 * 360))
+
+    cache.update(pygame, frame)
+
+    assert raw.copied is True
+    assert len(scale_calls) == 1
+    assert scale_calls[0][0] is not raw
+    assert scale_calls[0][1] == (420, 236)
+    assert cache.surface is scaled
+    assert cache.surface is cache.surface
+
+
+def test_render_performs_one_display_flip_per_cycle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = MealCaptureWorkflow(
+        SimulatedCamera(), _controller(), _store(tmp_path)
+    )
+    flips: list[None] = []
+    pygame = SimpleNamespace(
+        display=SimpleNamespace(flip=lambda: flips.append(None))
+    )
+    screen = SimpleNamespace(fill=lambda color: None)
+    monkeypatch.setattr(pygame_device_ui, "_render_home", lambda *args: None)
+    monkeypatch.setattr(pygame_device_ui, "_draw_button", lambda *args: None)
+
+    pygame_device_ui._render(
+        pygame, screen, SimpleNamespace(button=object()), workflow, None
+    )
+
+    assert flips == [None]
 
 
 def test_retake_deletes_image_and_returns_to_capture(tmp_path: Path) -> None:
@@ -272,6 +354,72 @@ def test_retake_deletes_image_and_returns_to_capture(tmp_path: Path) -> None:
     assert workflow.screen is UIScreen.CAPTURE
     assert not image.exists()
     assert not directory.exists()
+
+
+def test_ui_processing_transitions_to_recognized_foods_and_cleans_image(
+    tmp_path: Path,
+) -> None:
+    recognizer = RecordingRecognizer(
+        (RecognizedFood("Rice"), RecognizedFood("Vegetables")),
+        RecognitionSource.GEMINI,
+    )
+    workflow = MealCaptureWorkflow(
+        SimulatedCamera(), _controller(), _store(tmp_path), recognizer
+    )
+    workflow.analyze()
+    workflow.begin_capture()
+    workflow.perform_capture()
+    image = workflow.review_image
+    assert image is not None
+    directory = image.parent
+
+    workflow.begin_analysis()
+    assert workflow.screen is UIScreen.ANALYZING
+    workflow.perform_analysis()
+
+    assert workflow.screen is UIScreen.RECOGNIZED_FOODS
+    assert workflow.recognized_foods == (
+        RecognizedFood("Rice"),
+        RecognizedFood("Vegetables"),
+    )
+    assert workflow.recognition_source is RecognitionSource.GEMINI
+    assert recognizer.calls == [image]
+
+    workflow.retake()
+
+    assert workflow.screen is UIScreen.CAPTURE
+    assert workflow.recognized_foods == ()
+    assert workflow.recognition_source is None
+    assert not image.exists()
+    assert not directory.exists()
+
+
+def test_recognition_empty_foods_and_failure_clean_images(tmp_path: Path) -> None:
+    for recognizer, expected_screen, expected_message in (
+        (RecordingRecognizer(()), UIScreen.RECOGNIZED_FOODS, None),
+        (
+            RecordingRecognizer(error=RuntimeError("secret response")),
+            UIScreen.ERROR,
+            "Food recognition is unavailable.",
+        ),
+    ):
+        workflow = MealCaptureWorkflow(
+            SimulatedCamera(), _controller(), _store(tmp_path), recognizer
+        )
+        workflow.analyze()
+        workflow.begin_capture()
+        workflow.perform_capture()
+        image = workflow.review_image
+        assert image is not None
+        directory = image.parent
+
+        workflow.begin_analysis()
+        workflow.perform_analysis()
+
+        assert workflow.screen is expected_screen
+        assert workflow.error_message == expected_message
+        assert not image.exists()
+        assert not directory.exists()
 
 
 def test_analyze_deletes_image_and_home_returns_home(tmp_path: Path) -> None:

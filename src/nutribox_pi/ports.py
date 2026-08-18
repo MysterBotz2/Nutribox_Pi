@@ -9,6 +9,7 @@ from nutribox_pi.models import (
     AnalysisResult,
     CameraAvailability,
     CaptureResult,
+    FoodRecognitionResult,
     HealthResult,
     PreviewFrame,
 )
@@ -26,6 +27,10 @@ class Backend(Protocol):
     def health(self) -> HealthResult: ...
 
     def analyze_meal(self, image_path: Path, weight_grams: float) -> AnalysisResult: ...
+
+
+class FoodRecognizer(Protocol):
+    def recognize_food(self, image_path: Path) -> FoodRecognitionResult: ...
 
 
 class Camera(Protocol):

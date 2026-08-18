@@ -15,7 +15,6 @@ from nutribox_pi.device_ui import (
     BORDER,
     CARD,
     DANGER,
-    DEVELOPMENT_NOTICE,
     DISPLAY_ERROR,
     DISPLAY_SIZE,
     ELEVATED_SURFACE,
@@ -35,7 +34,7 @@ from nutribox_pi.device_ui import (
     buttons_for,
     scaled_image_size,
 )
-from nutribox_pi.ports import PreviewCamera
+from nutribox_pi.ports import FoodRecognizer, PreviewCamera
 
 PRESSED_PRIMARY = (48, 143, 72)
 PRESSED_CARD = (222, 222, 227)
@@ -48,6 +47,7 @@ PREVIEW_INTERVAL_SECONDS = 1 / 15
 def run_device_ui(
     camera: PreviewCamera | None = None,
     controller: NutriBoxController | None = None,
+    recognizer: FoodRecognizer | None = None,
     *,
     pygame_module: Any | None = None,
     store: TemporaryCaptureStore | None = None,
@@ -75,13 +75,14 @@ def run_device_ui(
             heading=pygame.font.Font(None, 48),
             subheading=pygame.font.Font(None, 34),
             body=pygame.font.Font(None, 28),
+            small=pygame.font.Font(None, 20),
             button=pygame.font.Font(None, 32),
         )
         if controller is None:
             outcome = UIResult(False, ANALYSIS_ERROR)
             return outcome
         workflow = MealCaptureWorkflow(
-            camera or camera_from_env(), controller, store
+            camera or camera_from_env(), controller, store, recognizer
         )
         outcome = _run_loop(pygame, screen, fonts, workflow)
     except Exception:
@@ -94,13 +95,31 @@ def run_device_ui(
     if not cleanup_result.ok:
         return cleanup_result
     return outcome
+
+
+class _PreviewSurfaceCache:
+    def __init__(self) -> None:
+        self.surface: Any | None = None
+
+    def update(self, pygame: Any, frame: Any) -> None:
+        detached = pygame.image.frombuffer(
+            frame.rgb_bytes,
+            (frame.width, frame.height),
+            "RGB",
+        ).copy()
+        size = scaled_image_size((frame.width, frame.height), PREVIEW_BOUNDS)
+        self.surface = pygame.transform.smoothscale(detached, size)
+
+    def clear(self) -> None:
+        self.surface = None
 class _Fonts:
     def __init__(
-        self, *, heading: Any, subheading: Any, body: Any, button: Any
+        self, *, heading: Any, subheading: Any, body: Any, small: Any, button: Any
     ) -> None:
         self.heading = heading
         self.subheading = subheading
         self.body = body
+        self.small = small
         self.button = button
 
 
@@ -112,14 +131,20 @@ def _run_loop(
 ) -> UIResult:
     pressed: UIAction | None = None
     next_preview_at = 0.0
+    preview_cache = _PreviewSurfaceCache()
     while True:
-        preview = None
         if workflow.screen is UIScreen.CAPTURE:
             now = time.monotonic()
             if now >= next_preview_at:
                 preview = workflow.preview_frame()
+                if preview is not None:
+                    preview_cache.update(pygame, preview)
                 next_preview_at = now + PREVIEW_INTERVAL_SECONDS
-        _render(pygame, screen, fonts, workflow, pressed, preview)
+        else:
+            preview_cache.clear()
+        _render(
+            pygame, screen, fonts, workflow, pressed, preview_cache.surface
+        )
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 return UIResult(True, UI_CLOSED)
@@ -128,7 +153,14 @@ def _run_loop(
             point = _pointer_point(pygame, event, down=True)
             if point is not None:
                 pressed = action_at(workflow.screen, *point)
-                _render(pygame, screen, fonts, workflow, pressed, preview)
+                _render(
+                    pygame,
+                    screen,
+                    fonts,
+                    workflow,
+                    pressed,
+                    preview_cache.surface,
+                )
                 continue
             point = _pointer_point(pygame, event, down=False)
             if point is None:
@@ -138,7 +170,14 @@ def _run_loop(
                 pressed = None
                 continue
             pressed = None
-            outcome = _apply_action(pygame, screen, fonts, workflow, action)
+            outcome = _apply_action(
+                pygame,
+                screen,
+                fonts,
+                workflow,
+                action,
+                preview_cache.surface,
+            )
             if outcome is not None:
                 return outcome
         if workflow.screen is UIScreen.CAPTURE:
@@ -153,6 +192,7 @@ def _apply_action(
     fonts: _Fonts,
     workflow: MealCaptureWorkflow,
     action: UIAction | None,
+    preview_surface: Any | None = None,
 ) -> UIResult | None:
     if action is None:
         return None
@@ -165,7 +205,7 @@ def _apply_action(
         workflow.back()
     elif action is UIAction.CAPTURE:
         workflow.begin_capture()
-        _render(pygame, screen, fonts, workflow, None)
+        _render(pygame, screen, fonts, workflow, None, preview_surface)
         pygame.event.pump()
         pygame.time.wait(80)
         workflow.perform_capture()
@@ -215,21 +255,13 @@ def _render(
         _render_analyzing(pygame, screen, fonts)
     elif workflow.screen in RESULT_SCREENS:
         _render_result(pygame, screen, fonts, workflow)
+    elif workflow.screen is UIScreen.RECOGNIZED_FOODS:
+        _render_recognized_foods(pygame, screen, fonts, workflow)
     else:
         _render_error(pygame, screen, fonts, workflow.error_message)
     for button in buttons_for(workflow.screen):
         _draw_button(pygame, screen, fonts.button, button, pressed is button.action)
     pygame.display.flip()
-
-
-def _render_development_notice(screen: Any, fonts: _Fonts) -> None:
-    _draw_text(
-        screen,
-        fonts.body,
-        DEVELOPMENT_NOTICE,
-        (400, 455),
-        SECONDARY_TEXT,
-    )
 
 
 def _render_home(pygame: Any, screen: Any, fonts: _Fonts) -> None:
@@ -242,7 +274,6 @@ def _render_home(pygame: Any, screen: Any, fonts: _Fonts) -> None:
         (400, 213),
         SECONDARY_TEXT,
     )
-    _render_development_notice(screen, fonts)
 
 
 def _render_capture(
@@ -261,19 +292,18 @@ def _render_capture(
     )
     _draw_text(screen, fonts.body, message, (400, 360), SECONDARY_TEXT)
     if preview is not None:
-        image = pygame.image.fromstring(
-            preview.rgb_bytes,
-            (preview.width, preview.height),
-            "RGB",
-        )
-        target_size = scaled_image_size(
-            (preview.width, preview.height), PREVIEW_BOUNDS
-        )
-        image = pygame.transform.smoothscale(image, target_size)
+        target_size = tuple(preview.get_size())
         left = (DISPLAY_SIZE[0] - target_size[0]) // 2
         top = 98 + (PREVIEW_BOUNDS[1] - target_size[1]) // 2
-        screen.blit(image, (left, top))
-    _render_development_notice(screen, fonts)
+        screen.blit(preview, (left, top))
+    else:
+        _draw_text(
+            screen,
+            fonts.body,
+            "Starting camera preview...",
+            (400, 215),
+            SECONDARY_TEXT,
+        )
 
 
 def _render_review(
@@ -305,7 +335,6 @@ def _render_analyzing(pygame: Any, screen: Any, fonts: _Fonts) -> None:
         (400, 220),
         SECONDARY_TEXT,
     )
-    _render_development_notice(screen, fonts)
 
 
 def _render_result(
@@ -320,7 +349,40 @@ def _render_result(
         (400, 220),
         SECONDARY_TEXT,
     )
-    _render_development_notice(screen, fonts)
+
+
+def _render_recognized_foods(
+    pygame: Any, screen: Any, fonts: _Fonts, workflow: MealCaptureWorkflow
+) -> None:
+    _draw_text(screen, fonts.subheading, "Recognized Foods", (400, 90), PRIMARY_TEXT)
+    _draw_card(pygame, screen, (90, 120, 620, 245))
+    source = (
+        "Simulated recognition"
+        if workflow.recognition_source is not None
+        and workflow.recognition_source.value == "simulated"
+        else "AI recognition"
+    )
+    _draw_text(screen, fonts.body, source, (400, 145), SECONDARY_TEXT)
+    if not workflow.recognized_foods:
+        _draw_text(screen, fonts.body, "No food recognized", (400, 240), PRIMARY_TEXT)
+        return
+    for index, food in enumerate(workflow.recognized_foods):
+        _draw_text(
+            screen,
+            fonts.small,
+            _ellipsize(fonts.small, food.name, 560),
+            (400, 175 + index * 18),
+            PRIMARY_TEXT,
+        )
+
+
+def _ellipsize(font: Any, text: str, maximum_width: int) -> str:
+    if font.size(text)[0] <= maximum_width:
+        return text
+    shortened = text
+    while shortened and font.size(shortened + "...")[0] > maximum_width:
+        shortened = shortened[:-1]
+    return shortened + "..."
 
 
 def _render_error(

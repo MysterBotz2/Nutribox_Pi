@@ -27,6 +27,22 @@ class AnalysisResult:
     payload: dict[str, Any]
 
 
+class RecognitionSource(StrEnum):
+    SIMULATED = "simulated"
+    GEMINI = "gemini"
+
+
+@dataclass(frozen=True, slots=True)
+class RecognizedFood:
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class FoodRecognitionResult:
+    foods: tuple[RecognizedFood, ...]
+    source: RecognitionSource
+
+
 class CameraCode(StrEnum):
     OK = "ok"
     SKIPPED = "skipped"
