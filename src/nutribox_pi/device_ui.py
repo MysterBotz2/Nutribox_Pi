@@ -91,9 +91,7 @@ class ButtonLayout:
     enabled: bool = True
 
 
-EXIT_BUTTON = ButtonLayout(
-    UIAction.EXIT, "Exit", TouchRect(660, 20, 110, 58), "danger"
-)
+EXIT_BUTTON = ButtonLayout(UIAction.EXIT, "Exit", TouchRect(660, 20, 110, 58), "danger")
 
 
 def buttons_for(screen: UIScreen) -> tuple[ButtonLayout, ...]:
@@ -109,9 +107,7 @@ def buttons_for(screen: UIScreen) -> tuple[ButtonLayout, ...]:
     if screen is UIScreen.CAPTURE:
         return (
             ButtonLayout(UIAction.BACK, "Back", TouchRect(30, 20, 110, 58), "card"),
-            ButtonLayout(
-                UIAction.CAPTURE, "Capture", TouchRect(240, 380, 320, 60)
-            ),
+            ButtonLayout(UIAction.CAPTURE, "Capture", TouchRect(240, 380, 320, 60)),
             EXIT_BUTTON,
         )
     if screen is UIScreen.CAPTURING:
@@ -131,7 +127,7 @@ def buttons_for(screen: UIScreen) -> tuple[ButtonLayout, ...]:
             ),
             ButtonLayout(
                 UIAction.ANALYZE_MEAL,
-                "Analyze Meal",
+                "Start meal analysis",
                 TouchRect(430, 394, 300, 66),
             ),
             EXIT_BUTTON,
@@ -357,6 +353,10 @@ class MealCaptureWorkflow:
             self.recognition_source = None
             self.analysis_response = None
             self._start_preview()
+
+    def show_recognized_foods(self) -> None:
+        if self.screen is UIScreen.CALCULATED:
+            self.screen = UIScreen.RECOGNIZED_FOODS
 
     def retry(self) -> None:
         if self._cleanup_or_error():

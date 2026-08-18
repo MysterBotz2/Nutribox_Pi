@@ -116,9 +116,7 @@ class RecordingPreviewCamera(SimulatedCamera):
 
 
 def _captured_workflow(tmp_path: Path) -> MealCaptureWorkflow:
-    workflow = MealCaptureWorkflow(
-        SimulatedCamera(), _controller(), _store(tmp_path)
-    )
+    workflow = MealCaptureWorkflow(SimulatedCamera(), _controller(), _store(tmp_path))
     workflow.analyze()
     workflow.begin_capture()
     workflow.perform_capture()
@@ -288,8 +286,9 @@ def test_preview_cache_detaches_scales_once_and_persists() -> None:
     pygame = SimpleNamespace(
         image=SimpleNamespace(frombuffer=lambda *args: raw),
         transform=SimpleNamespace(
-            smoothscale=lambda surface, size: scale_calls.append((surface, size))
-            or scaled
+            smoothscale=lambda surface, size: (
+                scale_calls.append((surface, size)) or scaled
+            )
         ),
     )
     cache = pygame_device_ui._PreviewSurfaceCache()
@@ -308,13 +307,9 @@ def test_preview_cache_detaches_scales_once_and_persists() -> None:
 def test_render_performs_one_display_flip_per_cycle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    workflow = MealCaptureWorkflow(
-        SimulatedCamera(), _controller(), _store(tmp_path)
-    )
+    workflow = MealCaptureWorkflow(SimulatedCamera(), _controller(), _store(tmp_path))
     flips: list[None] = []
-    pygame = SimpleNamespace(
-        display=SimpleNamespace(flip=lambda: flips.append(None))
-    )
+    pygame = SimpleNamespace(display=SimpleNamespace(flip=lambda: flips.append(None)))
     screen = SimpleNamespace(fill=lambda color: None)
     monkeypatch.setattr(pygame_device_ui, "_render_home", lambda *args: None)
     monkeypatch.setattr(pygame_device_ui, "_draw_button", lambda *args: None)
@@ -455,9 +450,7 @@ def test_analyze_deletes_image_and_home_returns_home(tmp_path: Path) -> None:
 
 
 def test_back_and_exit_are_clean(tmp_path: Path) -> None:
-    workflow = MealCaptureWorkflow(
-        SimulatedCamera(), _controller(), _store(tmp_path)
-    )
+    workflow = MealCaptureWorkflow(SimulatedCamera(), _controller(), _store(tmp_path))
     workflow.analyze()
     workflow.back()
 
@@ -494,9 +487,7 @@ def test_camera_failure_is_normalized_and_retry_returns_to_capture(
 
             return FailingPreview()  # type: ignore[return-value]
 
-    workflow = MealCaptureWorkflow(
-        FailingCamera(), _controller(), _store(tmp_path)
-    )
+    workflow = MealCaptureWorkflow(FailingCamera(), _controller(), _store(tmp_path))
     workflow.analyze()
     workflow.begin_capture()
     workflow.perform_capture()
@@ -655,7 +646,7 @@ def test_analyze_action_renders_visible_state_before_backend_call(
 
 def test_review_and_result_actions_match_pi2a_workflow() -> None:
     review_labels = {button.label for button in buttons_for(UIScreen.REVIEW)}
-    assert "Analyze Meal" in review_labels
+    assert "Start meal analysis" in review_labels
     assert "Done" not in review_labels
 
     for screen in STATUS_SCREENS.values():
