@@ -33,10 +33,11 @@ from nutribox_pi.device_ui import (
 from nutribox_pi.models import (
     AnalysisResult,
     AnalysisStatus,
+    CalculatedResponse,
     CameraCode,
     CaptureResult,
-    FoodRecognitionResult,
     HealthResult,
+    NutritionValues,
     PreviewFrame,
     RecognitionSource,
     RecognizedFood,
@@ -61,25 +62,6 @@ class RecordingBackend:
         if self.error is not None:
             raise self.error
         return AnalysisResult(self.status, {"status": self.status.value})
-
-
-class RecordingRecognizer:
-    def __init__(
-        self,
-        foods: tuple[RecognizedFood, ...] = (RecognizedFood("Rice"),),
-        source: RecognitionSource = RecognitionSource.SIMULATED,
-        error: Exception | None = None,
-    ) -> None:
-        self.foods = foods
-        self.source = source
-        self.error = error
-        self.calls: list[Path] = []
-
-    def recognize_food(self, image_path: Path) -> FoodRecognitionResult:
-        self.calls.append(image_path)
-        if self.error is not None:
-            raise self.error
-        return FoodRecognitionResult(self.foods, self.source)
 
 
 def _controller(
@@ -356,15 +338,27 @@ def test_retake_deletes_image_and_returns_to_capture(tmp_path: Path) -> None:
     assert not directory.exists()
 
 
-def test_ui_processing_transitions_to_recognized_foods_and_cleans_image(
+def test_analysis_uses_controller_once_not_food_recognizer_and_cleans_image(
     tmp_path: Path,
 ) -> None:
-    recognizer = RecordingRecognizer(
-        (RecognizedFood("Rice"), RecognizedFood("Vegetables")),
-        RecognitionSource.GEMINI,
-    )
+    class TypedBackend(RecordingBackend):
+        def analyze_meal(
+            self, image_path: Path, weight_grams: float
+        ) -> CalculatedResponse:
+            self.calls.append((image_path, weight_grams))
+            return CalculatedResponse(
+                AnalysisStatus.CALCULATED,
+                (RecognizedFood("Rice"),),
+                RecognitionSource.SIMULATED,
+                nutrition=NutritionValues("100", "2", "20", "1", "3"),
+            )
+
+    backend = TypedBackend()
     workflow = MealCaptureWorkflow(
-        SimulatedCamera(), _controller(), _store(tmp_path), recognizer
+        SimulatedCamera(),
+        _controller(backend, weight=321.5),
+        _store(tmp_path),
+        True,
     )
     workflow.analyze()
     workflow.begin_capture()
@@ -374,52 +368,19 @@ def test_ui_processing_transitions_to_recognized_foods_and_cleans_image(
     directory = image.parent
 
     workflow.begin_analysis()
-    assert workflow.screen is UIScreen.ANALYZING
     workflow.perform_analysis()
 
-    assert workflow.screen is UIScreen.RECOGNIZED_FOODS
-    assert workflow.recognized_foods == (
-        RecognizedFood("Rice"),
-        RecognizedFood("Vegetables"),
-    )
-    assert workflow.recognition_source is RecognitionSource.GEMINI
-    assert recognizer.calls == [image]
-
-    workflow.retake()
-
-    assert workflow.screen is UIScreen.CAPTURE
-    assert workflow.recognized_foods == ()
-    assert workflow.recognition_source is None
+    assert workflow.screen is UIScreen.CALCULATED
+    assert backend.calls == [(image, 321.5)]
+    assert workflow.analysis_response is not None
+    assert workflow.recognition_source is RecognitionSource.SIMULATED
     assert not image.exists()
     assert not directory.exists()
 
 
-def test_recognition_empty_foods_and_failure_clean_images(tmp_path: Path) -> None:
-    for recognizer, expected_screen, expected_message in (
-        (RecordingRecognizer(()), UIScreen.RECOGNIZED_FOODS, None),
-        (
-            RecordingRecognizer(error=RuntimeError("secret response")),
-            UIScreen.ERROR,
-            "Food recognition is unavailable.",
-        ),
-    ):
-        workflow = MealCaptureWorkflow(
-            SimulatedCamera(), _controller(), _store(tmp_path), recognizer
-        )
-        workflow.analyze()
-        workflow.begin_capture()
-        workflow.perform_capture()
-        image = workflow.review_image
-        assert image is not None
-        directory = image.parent
-
-        workflow.begin_analysis()
-        workflow.perform_analysis()
-
-        assert workflow.screen is expected_screen
-        assert workflow.error_message == expected_message
-        assert not image.exists()
-        assert not directory.exists()
+def test_active_ui_sources_do_not_call_food_recognizer() -> None:
+    source = Path("src/nutribox_pi/device_ui.py").read_text()
+    assert "recognize_food(" not in source
 
 
 def test_analyze_deletes_image_and_home_returns_home(tmp_path: Path) -> None:

@@ -12,11 +12,12 @@ from pathlib import Path
 from nutribox_pi.controller import NutriBoxController
 from nutribox_pi.models import (
     AnalysisStatus,
+    MealAnalysisResponse,
     PreviewFrame,
     RecognitionSource,
     RecognizedFood,
 )
-from nutribox_pi.ports import FoodRecognizer, PreviewCamera, PreviewSession
+from nutribox_pi.ports import PreviewCamera, PreviewSession
 from nutribox_pi.touchscreen import TouchRect
 
 DISPLAY_SIZE = (800, 480)
@@ -37,7 +38,6 @@ PREVIEW_ERROR = "Camera preview is unavailable."
 CLEANUP_ERROR = "Temporary image cleanup failed."
 DISPLAY_ERROR = "The Nutri-Box display is unavailable."
 ANALYSIS_ERROR = "Meal analysis is unavailable."
-RECOGNITION_ERROR = "Food recognition is unavailable."
 UI_CLOSED = "Nutri-Box UI closed."
 DEVELOPMENT_NOTICE = "Development mode: simulated weight"
 
@@ -247,18 +247,19 @@ class MealCaptureWorkflow:
         camera: PreviewCamera,
         controller: NutriBoxController,
         store: TemporaryCaptureStore | None = None,
-        recognizer: FoodRecognizer | None = None,
+        simulated_weight: bool = False,
     ) -> None:
         self._camera = camera
         self._preview: PreviewSession | None = None
         self._controller = controller
-        self._recognizer = recognizer
         self._store = store or TemporaryCaptureStore()
+        self.simulated_weight = simulated_weight
         self.screen = UIScreen.HOME
         self.error_message: str | None = None
         self.result_message: str | None = None
         self.recognized_foods: tuple[RecognizedFood, ...] = ()
         self.recognition_source: RecognitionSource | None = None
+        self.analysis_response: MealAnalysisResponse | None = None
 
     @property
     def review_image(self) -> Path | None:
@@ -269,6 +270,7 @@ class MealCaptureWorkflow:
         self.result_message = None
         self.recognized_foods = ()
         self.recognition_source = None
+        self.analysis_response = None
         self._start_preview()
 
     def back(self) -> None:
@@ -281,6 +283,7 @@ class MealCaptureWorkflow:
         self.result_message = None
         self.recognized_foods = ()
         self.recognition_source = None
+        self.analysis_response = None
         self.screen = UIScreen.CAPTURING
 
     def perform_capture(self) -> None:
@@ -322,12 +325,7 @@ class MealCaptureWorkflow:
             return
         image_path = self._store.image_path
         if image_path is None:
-            self._fail_after_cleanup(
-                RECOGNITION_ERROR if self._recognizer is not None else ANALYSIS_ERROR
-            )
-            return
-        if self._recognizer is not None:
-            self._perform_recognition(image_path)
+            self._fail_after_cleanup(ANALYSIS_ERROR)
             return
         result = None
         failed = False
@@ -347,33 +345,17 @@ class MealCaptureWorkflow:
             return
         self.screen = STATUS_SCREENS[result.status]
         self.result_message = RESULT_MESSAGES[result.status]
-
-    def _perform_recognition(self, image_path: Path) -> None:
-        result = None
-        failed = False
-        try:
-            result = self._recognizer.recognize_food(image_path)
-        except Exception:
-            failed = True
-        finally:
-            cleaned = self._store.cleanup()
-        if not cleaned:
-            self.screen = UIScreen.ERROR
-            self.error_message = CLEANUP_ERROR
-            return
-        if failed or result is None:
-            self.screen = UIScreen.ERROR
-            self.error_message = RECOGNITION_ERROR
-            return
-        self.recognized_foods = result.foods
-        self.recognition_source = result.source
-        self.screen = UIScreen.RECOGNIZED_FOODS
+        if isinstance(result, MealAnalysisResponse):
+            self.analysis_response = result
+            self.recognized_foods = result.recognized_foods
+            self.recognition_source = result.recognition_source
 
     def retake(self) -> None:
         if self._cleanup_or_error():
             self.error_message = None
             self.recognized_foods = ()
             self.recognition_source = None
+            self.analysis_response = None
             self._start_preview()
 
     def retry(self) -> None:
@@ -381,6 +363,7 @@ class MealCaptureWorkflow:
             self.error_message = None
             self.recognized_foods = ()
             self.recognition_source = None
+            self.analysis_response = None
             self._start_preview()
 
     def home(self) -> None:
@@ -389,6 +372,7 @@ class MealCaptureWorkflow:
             self.error_message = None
             self.recognized_foods = ()
             self.recognition_source = None
+            self.analysis_response = None
 
     def close(self) -> UIResult:
         preview_closed = self._close_preview()

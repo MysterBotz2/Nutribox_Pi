@@ -197,7 +197,7 @@ def test_cli_device_ui_exit_codes(
     monkeypatch.setattr(
         cli,
         "run_device_ui",
-        lambda *, controller, recognizer: result,
+        lambda *, controller, simulated_weight: result,
     )
 
     assert cli.main(["ui"]) == expected_exit
@@ -215,4 +215,4 @@ def test_cli_device_ui_missing_backend_configuration_is_normalized(
     )
 
     assert cli.main(["ui"]) == 1
-    assert capsys.readouterr().out == "Food recognition is unavailable.\n"
+    assert capsys.readouterr().out == "Meal analysis is unavailable.\n"

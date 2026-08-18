@@ -3,18 +3,22 @@
 The touch-operated workflow uses the verified 800 x 480 Raspberry Pi display,
 the existing Camera and preview-session ports, and the light-theme tokens in
 `nutribox_design_system_spec.md`. The active UI sends the reviewed temporary
-JPEG to the configured food-recognition endpoint through its dedicated
-FoodRecognizer port. The UI does not construct multipart requests or retain
-capture history.
+JPEG and the controller-provided measured weight to `POST /api/meals/analyze`
+through the existing Backend/Controller boundary. The UI does not construct
+multipart requests or retain capture history. The dedicated FoodRecognizer
+adapter remains available only for future identification-only use and is not
+called by Analyze Meal.
 
 On the Capture screen, the Camera Module 3 provides a local 640 x 360 live
 preview. The preview is not recorded, streamed, or written to disk. The same
 camera session performs the bounded autofocus and 1920 x 1080 JPEG still
 capture when Capture is pressed.
 
-Recognition displays the returned food names and whether the source is
-simulated recognition or AI recognition. It does not provide nutritional
-analysis: no calories, macros, portions, or recommendations are displayed.
+Analysis displays the four documented result variants. Calculated results show
+the matched food, measured weight, returned primary nutrition values, and a
+clear simulated-recognition label when applicable. A simulated-weight notice
+is shown only when the supplied weight adapter is simulated. Food-selection
+results list the returned candidates without inventing nutrition.
 
 ## Prepare the existing Pi environment
 
@@ -55,6 +59,6 @@ Validate Home, then tap Analyze Meal and confirm a live, proportional preview
 appears before capture. Confirm Back stops the preview, Capture shows its
 visible Capturing state, and Review follows the 1920 x 1080 still capture.
 Confirm Retake starts a new preview session. Then validate visible Analyzing,
-recognized foods (including the empty-food result), source labeling, Home, and
-Exit behavior. Review images preserve their aspect ratio, and no meal image
-remains after recognition or exit.
+all four analysis outcomes, source labeling, Home, and Exit behavior. Review
+images preserve their aspect ratio, and no meal image remains after analysis
+or exit.

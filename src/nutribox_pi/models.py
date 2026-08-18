@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -23,8 +24,45 @@ class HealthResult:
 
 @dataclass(frozen=True, slots=True)
 class AnalysisResult:
+    """Legacy status/payload result retained for compatible test doubles."""
+
     status: AnalysisStatus
     payload: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class NutritionValues:
+    """Nutrition values retained exactly as backend decimal strings or null."""
+
+    calories: str | None
+    protein: str | None
+    carbohydrates: str | None
+    fat: str | None
+    fiber: str | None
+    values: dict[str, str | None] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for value in (
+            self.calories,
+            self.protein,
+            self.carbohydrates,
+            self.fat,
+            self.fiber,
+            *self.values.values(),
+        ):
+            if value is not None:
+                _validate_decimal_string(value)
+
+
+def _validate_decimal_string(value: str) -> None:
+    if not isinstance(value, str):
+        raise ValueError("nutrition value must be a decimal string or null")
+    try:
+        parsed = Decimal(value)
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("nutrition value must be a decimal string or null") from exc
+    if not parsed.is_finite():
+        raise ValueError("nutrition value must be a decimal string or null")
 
 
 class RecognitionSource(StrEnum):
@@ -41,6 +79,36 @@ class RecognizedFood:
 class FoodRecognitionResult:
     foods: tuple[RecognizedFood, ...]
     source: RecognitionSource
+
+
+@dataclass(frozen=True, slots=True)
+class MealAnalysisResponse:
+    """Fields that every successful meal-analysis response contains."""
+
+    status: AnalysisStatus
+    recognized_foods: tuple[RecognizedFood, ...]
+    recognition_source: RecognitionSource
+    measured_weight_grams: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FoodNotRecognizedResponse(MealAnalysisResponse):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class RequiresFoodSelectionResponse(MealAnalysisResponse):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class NutritionReferenceNotFoundResponse(MealAnalysisResponse):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class CalculatedResponse(MealAnalysisResponse):
+    nutrition: NutritionValues = field(kw_only=True)
 
 
 class CameraCode(StrEnum):

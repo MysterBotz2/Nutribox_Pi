@@ -7,7 +7,19 @@ from typing import Any
 
 import requests
 
-from nutribox_pi.models import AnalysisResult, AnalysisStatus, HealthResult
+from nutribox_pi.models import (
+    AnalysisResult,
+    AnalysisStatus,
+    CalculatedResponse,
+    FoodNotRecognizedResponse,
+    HealthResult,
+    MealAnalysisResponse,
+    NutritionReferenceNotFoundResponse,
+    NutritionValues,
+    RecognitionSource,
+    RecognizedFood,
+    RequiresFoodSelectionResponse,
+)
 from nutribox_pi.validation import (
     validate_api_base_url,
     validate_timeout,
@@ -37,7 +49,9 @@ class V1BackendClient:
         self._request("GET", "/api/health")
         return HealthResult(healthy=True, payload={})
 
-    def analyze_meal(self, image_path: Path, weight_grams: float) -> AnalysisResult:
+    def analyze_meal(
+        self, image_path: Path, weight_grams: float
+    ) -> MealAnalysisResponse | AnalysisResult:
         try:
             weight_grams = validate_weight(weight_grams)
         except ValueError as exc:
@@ -52,19 +66,56 @@ class V1BackendClient:
                 response = self._request(
                     "POST",
                     "/api/meals/analyze",
-                    files={"file": (filename, image)},
+                    files={"file": ("meal.jpg", image, "image/jpeg")},
                     data={"weight_grams": f"{weight_grams:g}"},
                 )
         except OSError as exc:
             raise BackendError(f"cannot read image file: {image_path}") from exc
 
         payload = self._json_object(response)
+        return self._analysis_response(payload)
+
+    @staticmethod
+    def _analysis_response(payload: dict[str, Any]) -> MealAnalysisResponse:
         try:
             status = AnalysisStatus(payload["status"])
+            recognition_source = RecognitionSource(payload["recognition_source"])
+            foods_payload = payload["recognized_foods"]
         except (KeyError, ValueError) as exc:
-            message = "backend returned an unsupported analysis status"
-            raise BackendError(message) from exc
-        return AnalysisResult(status=status, payload=payload)
+            raise BackendError("backend returned an invalid analysis response") from exc
+        if not isinstance(foods_payload, list) or any(
+            not isinstance(food, str) or not food.strip() for food in foods_payload
+        ):
+            raise BackendError("backend returned an invalid analysis response")
+        common = {
+            "status": status,
+            "recognized_foods": tuple(
+                RecognizedFood(food.strip()) for food in foods_payload
+            ),
+            "recognition_source": recognition_source,
+        }
+        if status is AnalysisStatus.FOOD_NOT_RECOGNIZED:
+            return FoodNotRecognizedResponse(**common)
+        if status is AnalysisStatus.REQUIRES_FOOD_SELECTION:
+            return RequiresFoodSelectionResponse(**common)
+        if status is AnalysisStatus.NUTRITION_REFERENCE_NOT_FOUND:
+            return NutritionReferenceNotFoundResponse(**common)
+        nutrition = payload.get("nutrition")
+        required = {"calories", "protein", "carbohydrates", "fat", "fiber"}
+        if not isinstance(nutrition, dict) or not required.issubset(nutrition):
+            raise BackendError("backend returned an invalid analysis response")
+        try:
+            values = NutritionValues(
+                calories=nutrition["calories"],
+                protein=nutrition["protein"],
+                carbohydrates=nutrition["carbohydrates"],
+                fat=nutrition["fat"],
+                fiber=nutrition["fiber"],
+                values=nutrition,
+            )
+        except ValueError as exc:
+            raise BackendError("backend returned an invalid analysis response") from exc
+        return CalculatedResponse(**common, nutrition=values)
 
     def _request(self, method: str, path: str, **kwargs: Any) -> requests.Response:
         try:

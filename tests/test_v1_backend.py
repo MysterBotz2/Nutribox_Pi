@@ -6,7 +6,13 @@ import pytest
 import requests
 
 from nutribox_pi.adapters.v1_backend import BackendError, V1BackendClient
-from nutribox_pi.models import AnalysisStatus
+from nutribox_pi.models import (
+    AnalysisStatus,
+    CalculatedResponse,
+    FoodNotRecognizedResponse,
+    NutritionReferenceNotFoundResponse,
+    RequiresFoodSelectionResponse,
+)
 
 
 class FakeResponse:
@@ -65,11 +71,40 @@ def test_health_accepts_any_successful_body_without_parsing() -> None:
     ]
 
 
-@pytest.mark.parametrize("status", list(AnalysisStatus))
+def _payload(status: AnalysisStatus) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "status": status.value,
+        "recognized_foods": ["Rice"],
+        "recognition_source": "simulated",
+    }
+    if status is AnalysisStatus.CALCULATED:
+        payload["nutrition"] = {
+            "calories": "123.4",
+            "protein": "5.0",
+            "carbohydrates": "20.1",
+            "fat": None,
+            "fiber": "2",
+            "sodium": None,
+        }
+    return payload
+
+
+@pytest.mark.parametrize(
+    ("status", "response_type"),
+    [
+        (AnalysisStatus.CALCULATED, CalculatedResponse),
+        (AnalysisStatus.FOOD_NOT_RECOGNIZED, FoodNotRecognizedResponse),
+        (AnalysisStatus.REQUIRES_FOOD_SELECTION, RequiresFoodSelectionResponse),
+        (
+            AnalysisStatus.NUTRITION_REFERENCE_NOT_FOUND,
+            NutritionReferenceNotFoundResponse,
+        ),
+    ],
+)
 def test_analyze_accepts_exactly_documented_statuses(
-    tmp_path: Path, status: AnalysisStatus
+    tmp_path: Path, status: AnalysisStatus, response_type: type[object]
 ) -> None:
-    session = FakeSession(FakeResponse({"status": status.value}))
+    session = FakeSession(FakeResponse(_payload(status)))
     image = tmp_path / "meal.jpg"
     image.write_bytes(b"jpeg-data")
 
@@ -79,12 +114,17 @@ def test_analyze_accepts_exactly_documented_statuses(
 
     method, url, kwargs = session.calls[0]
     assert result.status is status
+    assert isinstance(result, response_type)
+    if status is AnalysisStatus.CALCULATED:
+        assert isinstance(result, CalculatedResponse)
+        assert result.nutrition.values["sodium"] is None
     assert method == "POST"
     assert url == "https://backend.test/api/meals/analyze"
     assert kwargs["data"] == {"weight_grams": "123.5"}
     assert set(kwargs["files"]) == {"file"}
-    filename, file_object = kwargs["files"]["file"]
+    filename, file_object, mime_type = kwargs["files"]["file"]
     assert filename == "meal.jpg"
+    assert mime_type == "image/jpeg"
     assert file_object.closed is True
     assert "headers" not in kwargs
     assert "user_id" not in repr(kwargs)
@@ -95,11 +135,19 @@ def test_analyze_accepts_exactly_documented_statuses(
 def test_analyze_rejects_undocumented_status(
     tmp_path: Path, status: object
 ) -> None:
-    session = FakeSession(FakeResponse({"status": status}))
+    session = FakeSession(
+        FakeResponse(
+            {
+                "status": status,
+                "recognized_foods": ["Rice"],
+                "recognition_source": "simulated",
+            }
+        )
+    )
     image = tmp_path / "meal.jpg"
     image.write_bytes(b"image")
 
-    with pytest.raises(BackendError, match="unsupported analysis status"):
+    with pytest.raises(BackendError, match="invalid analysis response"):
         V1BackendClient(
             "https://backend.test", 2, session=session  # type: ignore[arg-type]
         ).analyze_meal(image, 10)
@@ -156,4 +204,46 @@ def test_invalid_analysis_json_is_normalized(tmp_path: Path) -> None:
     with pytest.raises(BackendError, match="invalid JSON"):
         V1BackendClient(
             "https://backend.test", session=session  # type: ignore[arg-type]
+        ).analyze_meal(image, 10)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"status": "calculated"},
+        {
+            "status": "calculated",
+            "recognized_foods": ["Rice"],
+            "recognition_source": "mock",
+            "nutrition": {
+                "calories": "1",
+                "protein": "1",
+                "carbohydrates": "1",
+                "fat": "1",
+                "fiber": "1",
+            },
+        },
+        {
+            "status": "calculated",
+            "recognized_foods": ["Rice"],
+            "recognition_source": "gemini",
+            "nutrition": {
+                "calories": 1,
+                "protein": "1",
+                "carbohydrates": "1",
+                "fat": "1",
+                "fiber": "1",
+            },
+        },
+    ],
+)
+def test_analyze_rejects_invalid_typed_response(
+    tmp_path: Path, payload: dict[str, object]
+) -> None:
+    image = tmp_path / "meal.jpg"
+    image.write_bytes(b"jpeg")
+    with pytest.raises(BackendError, match="invalid analysis response"):
+        V1BackendClient(
+            "https://backend.test",
+            session=FakeSession(FakeResponse(payload)),  # type: ignore[arg-type]
         ).analyze_meal(image, 10)

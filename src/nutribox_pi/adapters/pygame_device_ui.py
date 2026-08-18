@@ -34,7 +34,8 @@ from nutribox_pi.device_ui import (
     buttons_for,
     scaled_image_size,
 )
-from nutribox_pi.ports import FoodRecognizer, PreviewCamera
+from nutribox_pi.models import AnalysisStatus, CalculatedResponse
+from nutribox_pi.ports import PreviewCamera
 
 PRESSED_PRIMARY = (48, 143, 72)
 PRESSED_CARD = (222, 222, 227)
@@ -47,8 +48,8 @@ PREVIEW_INTERVAL_SECONDS = 1 / 15
 def run_device_ui(
     camera: PreviewCamera | None = None,
     controller: NutriBoxController | None = None,
-    recognizer: FoodRecognizer | None = None,
     *,
+    simulated_weight: bool = False,
     pygame_module: Any | None = None,
     store: TemporaryCaptureStore | None = None,
 ) -> UIResult:
@@ -82,7 +83,7 @@ def run_device_ui(
             outcome = UIResult(False, ANALYSIS_ERROR)
             return outcome
         workflow = MealCaptureWorkflow(
-            camera or camera_from_env(), controller, store, recognizer
+            camera or camera_from_env(), controller, store, simulated_weight
         )
         outcome = _run_loop(pygame, screen, fonts, workflow)
     except Exception:
@@ -252,7 +253,7 @@ def _render(
     elif workflow.screen is UIScreen.REVIEW:
         _render_review(pygame, screen, fonts, workflow)
     elif workflow.screen is UIScreen.ANALYZING:
-        _render_analyzing(pygame, screen, fonts)
+        _render_analyzing(pygame, screen, fonts, workflow.simulated_weight)
     elif workflow.screen in RESULT_SCREENS:
         _render_result(pygame, screen, fonts, workflow)
     elif workflow.screen is UIScreen.RECOGNIZED_FOODS:
@@ -325,13 +326,19 @@ def _render_review(
     screen.blit(scaled, (left, top))
 
 
-def _render_analyzing(pygame: Any, screen: Any, fonts: _Fonts) -> None:
+def _render_analyzing(
+    pygame: Any, screen: Any, fonts: _Fonts, simulated_weight: bool
+) -> None:
     _draw_text(screen, fonts.heading, "Analyzing meal", (400, 120), PRIMARY_TEXT)
     _draw_card(pygame, screen, (120, 165, 560, 110))
     _draw_text(
         screen,
         fonts.body,
-        "Sending the meal image and simulated weight...",
+        (
+            "Sending the meal image and simulated weight..."
+            if simulated_weight
+            else "Sending the meal image and measured weight..."
+        ),
         (400, 220),
         SECONDARY_TEXT,
     )
@@ -340,15 +347,113 @@ def _render_analyzing(pygame: Any, screen: Any, fonts: _Fonts) -> None:
 def _render_result(
     pygame: Any, screen: Any, fonts: _Fonts, workflow: MealCaptureWorkflow
 ) -> None:
-    _draw_text(screen, fonts.heading, "Meal analysis", (400, 115), PRIMARY_TEXT)
-    _draw_card(pygame, screen, (100, 165, 600, 110))
+    response = workflow.analysis_response
+    _draw_text(
+        screen, fonts.subheading, "Meal analysis", (400, 55), PRIMARY_TEXT
+    )
+    _draw_card(pygame, screen, (70, 85, 660, 220))
+    if response is None:
+        _draw_text(
+            screen,
+            fonts.body,
+            workflow.result_message or ANALYSIS_ERROR,
+            (400, 190),
+            SECONDARY_TEXT,
+        )
+        return
+    source = (
+        "Simulated recognition"
+        if response.recognition_source.value == "simulated"
+        else "AI recognition"
+    )
+    _draw_text(screen, fonts.small, source, (400, 108), SECONDARY_TEXT)
+    if response.status is AnalysisStatus.FOOD_NOT_RECOGNIZED:
+        _draw_text(screen, fonts.body, "No food recognized", (400, 185), PRIMARY_TEXT)
+        return
+    if response.status is AnalysisStatus.REQUIRES_FOOD_SELECTION:
+        _draw_text(
+            screen,
+            fonts.body,
+            "Food selection is required",
+            (400, 140),
+            PRIMARY_TEXT,
+        )
+        _draw_foods(screen, fonts, response.recognized_foods, 175)
+        return
+    food = (
+        response.recognized_foods[0].name
+        if response.recognized_foods
+        else "Recognized food"
+    )
+    if response.status is AnalysisStatus.NUTRITION_REFERENCE_NOT_FOUND:
+        _draw_text(
+            screen,
+            fonts.body,
+            _ellipsize(fonts.body, food, 560),
+            (400, 165),
+            PRIMARY_TEXT,
+        )
+        _draw_text(
+            screen,
+            fonts.small,
+            "No nutrition reference is available.",
+            (400, 215),
+            SECONDARY_TEXT,
+        )
+        return
+    if not isinstance(response, CalculatedResponse):
+        _draw_text(screen, fonts.body, ANALYSIS_ERROR, (400, 185), SECONDARY_TEXT)
+        return
     _draw_text(
         screen,
-        fonts.body,
-        workflow.result_message or ANALYSIS_ERROR,
-        (400, 220),
-        SECONDARY_TEXT,
+        fonts.small,
+        _ellipsize(fonts.small, food, 560),
+        (400, 135),
+        PRIMARY_TEXT,
     )
+    weight = response.measured_weight_grams
+    if weight is not None:
+        _draw_text(
+            screen,
+            fonts.small,
+            f"Measured weight: {weight:g} g",
+            (400, 158),
+            SECONDARY_TEXT,
+        )
+    if workflow.simulated_weight:
+        _draw_text(
+            screen,
+            fonts.small,
+            "Development mode: simulated weight",
+            (400, 181),
+            SECONDARY_TEXT,
+        )
+    nutrition = response.nutrition
+    labels = (
+        ("Calories", nutrition.calories),
+        ("Protein", nutrition.protein),
+        ("Carbohydrates", nutrition.carbohydrates),
+        ("Fat", nutrition.fat),
+        ("Fiber", nutrition.fiber),
+    )
+    for index, (label, value) in enumerate(labels):
+        text = f"{label}: {value if value is not None else '—'}"
+        x = 200 if index % 2 == 0 else 530
+        y = 210 + (index // 2) * 25
+        _draw_text(screen, fonts.small, text, (x, y), PRIMARY_TEXT)
+
+
+def _draw_foods(
+    screen: Any, fonts: _Fonts, foods: tuple[Any, ...], top: int
+) -> None:
+    for index, food in enumerate(foods):
+        _draw_text(
+            screen,
+            fonts.small,
+            _ellipsize(fonts.small, food.name, 560),
+            (400, top + index * 20),
+            PRIMARY_TEXT,
+        )
 
 
 def _render_recognized_foods(

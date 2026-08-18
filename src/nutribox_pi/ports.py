@@ -11,6 +11,7 @@ from nutribox_pi.models import (
     CaptureResult,
     FoodRecognitionResult,
     HealthResult,
+    MealAnalysisResponse,
     PreviewFrame,
 )
 
@@ -26,7 +27,9 @@ class TemperatureSensor(Protocol):
 class Backend(Protocol):
     def health(self) -> HealthResult: ...
 
-    def analyze_meal(self, image_path: Path, weight_grams: float) -> AnalysisResult: ...
+    def analyze_meal(
+        self, image_path: Path, weight_grams: float
+    ) -> MealAnalysisResponse | AnalysisResult: ...
 
 
 class FoodRecognizer(Protocol):
