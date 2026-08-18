@@ -81,3 +81,12 @@ class CaptureResult:
     width: int | None
     height: int | None
     byte_size: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class PreviewFrame:
+    """An immutable RGB camera frame with no hardware-library types."""
+
+    width: int
+    height: int
+    rgb_bytes: bytes

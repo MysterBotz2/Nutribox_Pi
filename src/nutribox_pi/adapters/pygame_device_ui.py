@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import time
 from contextlib import suppress
 from typing import Any
 
@@ -34,16 +35,18 @@ from nutribox_pi.device_ui import (
     buttons_for,
     scaled_image_size,
 )
-from nutribox_pi.ports import Camera
+from nutribox_pi.ports import PreviewCamera
 
 PRESSED_PRIMARY = (48, 143, 72)
 PRESSED_CARD = (222, 222, 227)
 WHITE = (255, 255, 255)
 REVIEW_BOUNDS = (620, 300)
+PREVIEW_BOUNDS = (420, 236)
+PREVIEW_INTERVAL_SECONDS = 1 / 15
 
 
 def run_device_ui(
-    camera: Camera | None = None,
+    camera: PreviewCamera | None = None,
     controller: NutriBoxController | None = None,
     *,
     pygame_module: Any | None = None,
@@ -108,8 +111,15 @@ def _run_loop(
     workflow: MealCaptureWorkflow,
 ) -> UIResult:
     pressed: UIAction | None = None
+    next_preview_at = 0.0
     while True:
-        _render(pygame, screen, fonts, workflow, pressed)
+        preview = None
+        if workflow.screen is UIScreen.CAPTURE:
+            now = time.monotonic()
+            if now >= next_preview_at:
+                preview = workflow.preview_frame()
+                next_preview_at = now + PREVIEW_INTERVAL_SECONDS
+        _render(pygame, screen, fonts, workflow, pressed, preview)
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 return UIResult(True, UI_CLOSED)
@@ -118,7 +128,7 @@ def _run_loop(
             point = _pointer_point(pygame, event, down=True)
             if point is not None:
                 pressed = action_at(workflow.screen, *point)
-                _render(pygame, screen, fonts, workflow, pressed)
+                _render(pygame, screen, fonts, workflow, pressed, preview)
                 continue
             point = _pointer_point(pygame, event, down=False)
             if point is None:
@@ -131,6 +141,10 @@ def _run_loop(
             outcome = _apply_action(pygame, screen, fonts, workflow, action)
             if outcome is not None:
                 return outcome
+        if workflow.screen is UIScreen.CAPTURE:
+            remaining = next_preview_at - time.monotonic()
+            if remaining > 0:
+                pygame.time.wait(max(1, round(remaining * 1000)))
 
 
 def _apply_action(
@@ -188,12 +202,13 @@ def _render(
     fonts: _Fonts,
     workflow: MealCaptureWorkflow,
     pressed: UIAction | None,
+    preview: Any | None = None,
 ) -> None:
     screen.fill(BACKGROUND)
     if workflow.screen is UIScreen.HOME:
         _render_home(pygame, screen, fonts)
     elif workflow.screen in {UIScreen.CAPTURE, UIScreen.CAPTURING}:
-        _render_capture(pygame, screen, fonts, workflow.screen)
+        _render_capture(pygame, screen, fonts, workflow.screen, preview)
     elif workflow.screen is UIScreen.REVIEW:
         _render_review(pygame, screen, fonts, workflow)
     elif workflow.screen is UIScreen.ANALYZING:
@@ -231,16 +246,33 @@ def _render_home(pygame: Any, screen: Any, fonts: _Fonts) -> None:
 
 
 def _render_capture(
-    pygame: Any, screen: Any, fonts: _Fonts, state: UIScreen
+    pygame: Any,
+    screen: Any,
+    fonts: _Fonts,
+    state: UIScreen,
+    preview: Any | None,
 ) -> None:
-    _draw_text(screen, fonts.heading, "Capture your meal", (400, 105), PRIMARY_TEXT)
-    _draw_card(pygame, screen, (120, 145, 560, 135))
+    _draw_text(screen, fonts.subheading, "Capture your meal", (400, 68), PRIMARY_TEXT)
+    _draw_card(pygame, screen, (180, 88, 440, 256))
     message = (
         "Capturing your meal..."
         if state is UIScreen.CAPTURING
         else "Place the full meal inside the camera view, then tap Capture."
     )
-    _draw_text(screen, fonts.body, message, (400, 212), SECONDARY_TEXT)
+    _draw_text(screen, fonts.body, message, (400, 360), SECONDARY_TEXT)
+    if preview is not None:
+        image = pygame.image.fromstring(
+            preview.rgb_bytes,
+            (preview.width, preview.height),
+            "RGB",
+        )
+        target_size = scaled_image_size(
+            (preview.width, preview.height), PREVIEW_BOUNDS
+        )
+        image = pygame.transform.smoothscale(image, target_size)
+        left = (DISPLAY_SIZE[0] - target_size[0]) // 2
+        top = 98 + (PREVIEW_BOUNDS[1] - target_size[1]) // 2
+        screen.blit(image, (left, top))
     _render_development_notice(screen, fonts)
 
 

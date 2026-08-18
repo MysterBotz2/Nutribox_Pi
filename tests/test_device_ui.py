@@ -36,6 +36,7 @@ from nutribox_pi.models import (
     CameraCode,
     CaptureResult,
     HealthResult,
+    PreviewFrame,
 )
 
 
@@ -79,6 +80,36 @@ def _store(tmp_path: Path) -> TemporaryCaptureStore:
     return TemporaryCaptureStore(directory_factory=create_directory)
 
 
+class RecordingPreviewSession:
+    def __init__(self, camera: SimulatedCamera, *, close_result: bool = True) -> None:
+        self.camera = camera
+        self.close_result = close_result
+        self.closed = False
+        self.frame_calls = 0
+
+    def read_frame(self) -> PreviewFrame | None:
+        self.frame_calls += 1
+        return PreviewFrame(640, 360, bytes((1, 2, 3)) * (640 * 360))
+
+    def capture(self, output_path: Path, overwrite: bool = False) -> CaptureResult:
+        return self.camera.capture(output_path, overwrite)
+
+    def close(self) -> bool:
+        self.closed = True
+        return self.close_result
+
+
+class RecordingPreviewCamera(SimulatedCamera):
+    def __init__(self, *, close_result: bool = True) -> None:
+        self.close_result = close_result
+        self.sessions: list[RecordingPreviewSession] = []
+
+    def open_preview_session(self) -> RecordingPreviewSession:
+        session = RecordingPreviewSession(self, close_result=self.close_result)
+        self.sessions.append(session)
+        return session
+
+
 def _captured_workflow(tmp_path: Path) -> MealCaptureWorkflow:
     workflow = MealCaptureWorkflow(
         SimulatedCamera(), _controller(), _store(tmp_path)
@@ -112,6 +143,122 @@ def test_home_capture_capturing_review_transition(tmp_path: Path) -> None:
     assert workflow.screen is UIScreen.REVIEW
     assert workflow.review_image is not None
     assert workflow.review_image.is_file()
+
+
+def test_capture_entry_starts_preview_and_back_closes_it(tmp_path: Path) -> None:
+    camera = RecordingPreviewCamera()
+    workflow = MealCaptureWorkflow(camera, _controller(), _store(tmp_path))
+
+    workflow.analyze()
+
+    assert workflow.screen is UIScreen.CAPTURE
+    assert len(camera.sessions) == 1
+    assert workflow.preview_frame() == PreviewFrame(
+        640, 360, bytes((1, 2, 3)) * (640 * 360)
+    )
+    workflow.back()
+    assert workflow.screen is UIScreen.HOME
+    assert camera.sessions[0].closed is True
+
+
+def test_capture_closes_preview_before_review_and_retake_opens_new_preview(
+    tmp_path: Path,
+) -> None:
+    camera = RecordingPreviewCamera()
+    workflow = MealCaptureWorkflow(camera, _controller(), _store(tmp_path))
+    workflow.analyze()
+    first = camera.sessions[0]
+    workflow.begin_capture()
+    workflow.perform_capture()
+
+    assert workflow.screen is UIScreen.REVIEW
+    assert first.closed is True
+    workflow.retake()
+    assert workflow.screen is UIScreen.CAPTURE
+    assert len(camera.sessions) == 2
+
+
+def test_preview_cleanup_failure_overrides_capture_success(tmp_path: Path) -> None:
+    workflow = MealCaptureWorkflow(
+        RecordingPreviewCamera(close_result=False), _controller(), _store(tmp_path)
+    )
+    workflow.analyze()
+    workflow.begin_capture()
+    workflow.perform_capture()
+
+    assert workflow.screen is UIScreen.ERROR
+    assert workflow.error_message == CLEANUP_ERROR
+
+
+def test_preview_failure_is_normalized(tmp_path: Path) -> None:
+    class UnavailablePreviewCamera(SimulatedCamera):
+        def open_preview_session(self) -> None:
+            return None
+
+    workflow = MealCaptureWorkflow(
+        UnavailablePreviewCamera(), _controller(), _store(tmp_path)
+    )
+
+    workflow.analyze()
+
+    assert workflow.screen is UIScreen.ERROR
+    assert workflow.error_message == "Camera preview is unavailable."
+
+
+def test_capture_cancellation_closes_preview_before_reraising(
+    tmp_path: Path,
+) -> None:
+    class CancellingSession(RecordingPreviewSession):
+        def capture(self, output_path: Path, overwrite: bool = False) -> CaptureResult:
+            raise KeyboardInterrupt
+
+    class CancellingCamera(RecordingPreviewCamera):
+        def open_preview_session(self) -> CancellingSession:
+            session = CancellingSession(self)
+            self.sessions.append(session)
+            return session
+
+    camera = CancellingCamera()
+    workflow = MealCaptureWorkflow(camera, _controller(), _store(tmp_path))
+    workflow.analyze()
+    workflow.begin_capture()
+
+    with pytest.raises(KeyboardInterrupt):
+        workflow.perform_capture()
+
+    assert camera.sessions[0].closed is True
+
+
+def test_preview_loop_throttles_to_about_fifteen_fps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    camera = RecordingPreviewCamera()
+    workflow = MealCaptureWorkflow(camera, _controller(), _store(tmp_path))
+    workflow.analyze()
+    events = iter([[], [SimpleNamespace(type=FakePygame.QUIT)]])
+    waits: list[int] = []
+    pygame = SimpleNamespace(
+        QUIT=FakePygame.QUIT,
+        KEYDOWN=FakePygame.KEYDOWN,
+        K_ESCAPE=FakePygame.K_ESCAPE,
+        MOUSEBUTTONDOWN=FakePygame.MOUSEBUTTONDOWN,
+        MOUSEBUTTONUP=FakePygame.MOUSEBUTTONUP,
+        FINGERDOWN=FakePygame.FINGERDOWN,
+        FINGERUP=FakePygame.FINGERUP,
+        event=SimpleNamespace(get=lambda: next(events)),
+        time=SimpleNamespace(wait=waits.append),
+    )
+    monotonic_values = iter([0.0, 0.0, 0.01])
+    monkeypatch.setattr(
+        pygame_device_ui.time, "monotonic", lambda: next(monotonic_values)
+    )
+    monkeypatch.setattr(pygame_device_ui, "_render", lambda *args: None)
+
+    result = pygame_device_ui._run_loop(pygame, object(), object(), workflow)
+
+    assert result.ok is True
+    assert camera.sessions[0].frame_calls == 1
+    assert waits == [67]
 
 
 def test_retake_deletes_image_and_returns_to_capture(tmp_path: Path) -> None:
@@ -158,20 +305,30 @@ def test_camera_failure_is_normalized_and_retry_returns_to_capture(
     tmp_path: Path,
 ) -> None:
     class FailingCamera:
-        def capture(
-            self, output_path: Path, overwrite: bool = False
-        ) -> CaptureResult:
-            return CaptureResult(
-                False,
-                CameraCode.CAPTURE_FAILED,
-                "/secret/raw camera exception",
-                False,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
+        def open_preview_session(self) -> RecordingPreviewSession:
+            class FailingPreview:
+                def read_frame(self) -> PreviewFrame | None:
+                    return None
+
+                def capture(
+                    self, output_path: Path, overwrite: bool = False
+                ) -> CaptureResult:
+                    return CaptureResult(
+                        False,
+                        CameraCode.CAPTURE_FAILED,
+                        "/secret/raw camera exception",
+                        False,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+
+                def close(self) -> bool:
+                    return True
+
+            return FailingPreview()  # type: ignore[return-value]
 
     workflow = MealCaptureWorkflow(
         FailingCamera(), _controller(), _store(tmp_path)

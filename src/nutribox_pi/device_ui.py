@@ -10,8 +10,8 @@ from enum import StrEnum
 from pathlib import Path
 
 from nutribox_pi.controller import NutriBoxController
-from nutribox_pi.models import AnalysisStatus
-from nutribox_pi.ports import Camera
+from nutribox_pi.models import AnalysisStatus, PreviewFrame
+from nutribox_pi.ports import PreviewCamera, PreviewSession
 from nutribox_pi.touchscreen import TouchRect
 
 DISPLAY_SIZE = (800, 480)
@@ -28,6 +28,7 @@ BORDER = (232, 232, 237)
 DANGER = (229, 57, 53)
 
 CAMERA_ERROR = "Unable to capture the meal image."
+PREVIEW_ERROR = "Camera preview is unavailable."
 CLEANUP_ERROR = "Temporary image cleanup failed."
 DISPLAY_ERROR = "The Nutri-Box display is unavailable."
 ANALYSIS_ERROR = "Meal analysis is unavailable."
@@ -102,7 +103,7 @@ def buttons_for(screen: UIScreen) -> tuple[ButtonLayout, ...]:
         return (
             ButtonLayout(UIAction.BACK, "Back", TouchRect(30, 20, 110, 58), "card"),
             ButtonLayout(
-                UIAction.CAPTURE, "Capture", TouchRect(240, 318, 320, 88)
+                UIAction.CAPTURE, "Capture", TouchRect(240, 380, 320, 60)
             ),
             EXIT_BUTTON,
         )
@@ -111,7 +112,7 @@ def buttons_for(screen: UIScreen) -> tuple[ButtonLayout, ...]:
             ButtonLayout(
                 UIAction.CAPTURE,
                 "Capturing...",
-                TouchRect(240, 318, 320, 88),
+                TouchRect(240, 380, 320, 60),
                 enabled=False,
             ),
             EXIT_BUTTON,
@@ -228,11 +229,12 @@ RESULT_SCREENS = frozenset(STATUS_SCREENS.values())
 class MealCaptureWorkflow:
     def __init__(
         self,
-        camera: Camera,
+        camera: PreviewCamera,
         controller: NutriBoxController,
         store: TemporaryCaptureStore | None = None,
     ) -> None:
         self._camera = camera
+        self._preview: PreviewSession | None = None
         self._controller = controller
         self._store = store or TemporaryCaptureStore()
         self.screen = UIScreen.HOME
@@ -246,11 +248,12 @@ class MealCaptureWorkflow:
     def analyze(self) -> None:
         self.error_message = None
         self.result_message = None
-        self.screen = UIScreen.CAPTURE
+        self._start_preview()
 
     def back(self) -> None:
-        self.error_message = None
-        self.screen = UIScreen.HOME
+        if self._close_preview():
+            self.error_message = None
+            self.screen = UIScreen.HOME
 
     def begin_capture(self) -> None:
         self.error_message = None
@@ -262,9 +265,18 @@ class MealCaptureWorkflow:
             return
         try:
             destination = self._store.prepare()
-            result = self._camera.capture(destination, overwrite=False)
+            preview = self._preview
+            if preview is None:
+                self._fail_after_cleanup(PREVIEW_ERROR)
+                return
+            result = preview.capture(destination, overwrite=False)
         except Exception:
             self._fail_after_cleanup(CAMERA_ERROR)
+            return
+        finally:
+            preview_closed = self._close_preview()
+        if not preview_closed:
+            self._fail_after_cleanup(CLEANUP_ERROR)
             return
         if (
             result.ok
@@ -310,25 +322,58 @@ class MealCaptureWorkflow:
 
     def retake(self) -> None:
         if self._cleanup_or_error():
-            self.screen = UIScreen.CAPTURE
             self.error_message = None
+            self._start_preview()
 
     def retry(self) -> None:
         if self._cleanup_or_error():
-            self.screen = UIScreen.CAPTURE
             self.error_message = None
+            self._start_preview()
 
     def home(self) -> None:
-        if self._cleanup_or_error():
+        if self._close_preview() and self._cleanup_or_error():
             self.screen = UIScreen.HOME
             self.error_message = None
 
     def close(self) -> UIResult:
-        if not self._store.cleanup():
+        preview_closed = self._close_preview()
+        if not preview_closed or not self._store.cleanup():
             self.screen = UIScreen.ERROR
             self.error_message = CLEANUP_ERROR
             return UIResult(False, CLEANUP_ERROR)
         return UIResult(True, UI_CLOSED)
+
+    def preview_frame(self) -> PreviewFrame | None:
+        if self.screen is not UIScreen.CAPTURE or self._preview is None:
+            return None
+        frame = self._preview.read_frame()
+        if frame is None:
+            self._close_preview()
+            self.screen = UIScreen.ERROR
+            self.error_message = PREVIEW_ERROR
+        return frame
+
+    def _start_preview(self) -> None:
+        try:
+            preview = self._camera.open_preview_session()
+        except Exception:
+            preview = None
+        if preview is None:
+            self.screen = UIScreen.ERROR
+            self.error_message = PREVIEW_ERROR
+            return
+        self._preview = preview
+        self.screen = UIScreen.CAPTURE
+
+    def _close_preview(self) -> bool:
+        preview = self._preview
+        self._preview = None
+        if preview is None:
+            return True
+        try:
+            return preview.close()
+        except Exception:
+            return False
 
     def _fail_after_cleanup(self, message: str) -> None:
         if not self._store.cleanup():

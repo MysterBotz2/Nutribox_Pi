@@ -8,6 +8,7 @@ import importlib.metadata
 import os
 import re
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,13 @@ from nutribox_pi.adapters.camera_base import (
     CaptureFailure,
     SafeCameraAdapter,
 )
-from nutribox_pi.models import CAMERA_MESSAGES, CameraAvailability, CameraCode
+from nutribox_pi.models import (
+    CAMERA_MESSAGES,
+    CameraAvailability,
+    CameraCode,
+    CaptureResult,
+    PreviewFrame,
+)
 
 _SAFE_VERSION = re.compile(r"[A-Za-z0-9._+\-~:]{1,64}\Z", re.ASCII)
 _REQUIRED_METHODS = (
@@ -30,6 +37,11 @@ _REQUIRED_METHODS = (
     "capture_file",
     "stop",
     "close",
+)
+_PREVIEW_METHODS = (
+    "create_preview_configuration",
+    "capture_array",
+    "switch_mode_and_capture_file",
 )
 
 
@@ -69,6 +81,10 @@ class Picamera2Camera(SafeCameraAdapter):
             versions[0],
             versions[1],
         )
+
+    def open_preview_session(self) -> Picamera2PreviewSession | None:
+        session = Picamera2PreviewSession(self)
+        return session if session.start() else None
 
     def _capture_to_staging(self, staging: Path) -> None:
         loaded = self._load_stack()
@@ -276,3 +292,133 @@ class Picamera2Camera(SafeCameraAdapter):
             versions[0],
             versions[1],
         )
+
+
+class Picamera2PreviewSession:
+    """One preview-owned Picamera2 instance that also captures the still."""
+
+    def __init__(self, adapter: Picamera2Camera) -> None:
+        self._adapter = adapter
+        self._camera: Any | None = None
+        self._start_attempted = False
+
+    def start(self) -> bool:
+        loaded = self._adapter._load_stack()
+        if isinstance(loaded, CameraAvailability):
+            return False
+        picamera_class, _libcamera, _versions = loaded
+        if not self._adapter._has_required_api(picamera_class) or not all(
+            hasattr(picamera_class, name) for name in _PREVIEW_METHODS
+        ):
+            return False
+        try:
+            cameras = picamera_class.global_camera_info()
+            camera_index = self._adapter._compatible_index(cameras)
+            if camera_index is None:
+                return False
+            camera = picamera_class(camera_index)
+            self._camera = camera
+            configuration = camera.create_preview_configuration(
+                main={"size": (640, 360), "format": "BGR888"},
+                buffer_count=4,
+                queue=False,
+                display=None,
+                encode=None,
+            )
+            camera.configure(configuration)
+            self._start_attempted = True
+            camera.start()
+            return True
+        except BaseException as exc:
+            with suppress(BaseException):
+                self.close()
+            if not isinstance(exc, Exception):
+                raise
+            return False
+
+    def read_frame(self) -> PreviewFrame | None:
+        camera = self._camera
+        if camera is None:
+            return None
+        try:
+            frame = camera.capture_array("main")
+            return self._frame_from_array(frame)
+        except BaseException as exc:
+            with suppress(BaseException):
+                self.close()
+            if not isinstance(exc, Exception):
+                raise
+            return None
+
+    def capture(self, output_path: Path, overwrite: bool = False) -> CaptureResult:
+        if self._camera is None:
+            return self._adapter._failure(CameraCode.CAMERA_UNAVAILABLE)
+        result = self._adapter.capture_using(
+            output_path,
+            overwrite=overwrite,
+            staging_writer=self._capture_still,
+        )
+        return result
+
+    def _capture_still(self, staging: Path) -> None:
+        camera = self._camera
+        if camera is None:
+            raise CaptureFailure(CameraCode.CAMERA_UNAVAILABLE)
+        self._adapter._autofocus(camera)
+        try:
+            configuration = camera.create_still_configuration(
+                main={"size": (1920, 1080)}
+            )
+            camera.switch_mode_and_capture_file(
+                configuration,
+                str(staging),
+                format="jpeg",
+            )
+        except Exception as exc:
+            raise CaptureFailure(CameraCode.CAPTURE_FAILED) from exc
+        self._adapter._sync_path_capture(staging)
+
+    def close(self) -> bool:
+        camera = self._camera
+        self._camera = None
+        if camera is None:
+            return True
+        failed = False
+        cancellation: BaseException | None = None
+        try:
+            if self._start_attempted:
+                try:
+                    camera.stop()
+                except BaseException as exc:
+                    if isinstance(exc, Exception):
+                        failed = True
+                    else:
+                        cancellation = exc
+        finally:
+            try:
+                camera.close()
+            except BaseException as exc:
+                if isinstance(exc, Exception):
+                    failed = True
+                elif cancellation is None:
+                    cancellation = exc
+        self._start_attempted = False
+        if cancellation is not None:
+            raise cancellation
+        return not failed
+
+    @staticmethod
+    def _frame_from_array(frame: Any) -> PreviewFrame | None:
+        if (
+            getattr(frame, "shape", None) != (360, 640, 3)
+            or str(getattr(frame, "dtype", "")) != "uint8"
+        ):
+            return None
+        try:
+            rgb_bytes = bytes(frame.tobytes())
+        except Exception:
+            return None
+        if len(rgb_bytes) != 640 * 360 * 3:
+            return None
+        # Picamera2 BGR888 is already byte-ordered for the RGB display contract.
+        return PreviewFrame(640, 360, rgb_bytes)

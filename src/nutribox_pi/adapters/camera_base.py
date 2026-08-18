@@ -6,6 +6,7 @@ import errno
 import os
 import tempfile
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 
@@ -36,6 +37,20 @@ class SafeCameraAdapter(ABC):
         """Write, sync, close, and release camera resources."""
 
     def capture(self, output_path: Path, overwrite: bool = False) -> CaptureResult:
+        return self.capture_using(
+            output_path,
+            overwrite=overwrite,
+            staging_writer=self._capture_to_staging,
+        )
+
+    def capture_using(
+        self,
+        output_path: Path,
+        *,
+        overwrite: bool,
+        staging_writer: Callable[[Path], None],
+    ) -> CaptureResult:
+        """Publish one capture written by an adapter-owned camera session."""
         try:
             destination = validate_output_path(Path(output_path), overwrite)
         except FileExistsError:
@@ -70,7 +85,7 @@ class SafeCameraAdapter(ABC):
 
             if primary is None and staging is not None:
                 try:
-                    self._capture_to_staging(staging)
+                    staging_writer(staging)
                 except CaptureFailure as exc:
                     primary = exc
                 except Exception as exc:

@@ -10,6 +10,7 @@ from nutribox_pi.models import (
     CameraAvailability,
     CaptureResult,
     HealthResult,
+    PreviewFrame,
 )
 
 
@@ -33,3 +34,15 @@ class Camera(Protocol):
     def capture(
         self, output_path: Path, overwrite: bool = False
     ) -> CaptureResult: ...
+
+
+class PreviewSession(Protocol):
+    def read_frame(self) -> PreviewFrame | None: ...
+
+    def capture(self, output_path: Path, overwrite: bool = False) -> CaptureResult: ...
+
+    def close(self) -> bool: ...
+
+
+class PreviewCamera(Camera, Protocol):
+    def open_preview_session(self) -> PreviewSession | None: ...

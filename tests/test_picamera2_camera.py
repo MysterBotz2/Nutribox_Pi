@@ -8,10 +8,11 @@ import pytest
 from nutribox_pi.adapters.camera_base import CaptureFailure
 from nutribox_pi.adapters.picamera2_camera import (
     Picamera2Camera,
+    Picamera2PreviewSession,
     sanitize_version,
 )
 from nutribox_pi.adapters.simulated_camera import synthetic_jpeg
-from nutribox_pi.models import CameraCode
+from nutribox_pi.models import CameraCode, PreviewFrame
 
 
 @pytest.mark.parametrize(
@@ -131,15 +132,21 @@ def test_importing_package_does_not_import_pi_libraries() -> None:
 
 class StubPicamera:
     close_fails = False
+    instances: list["StubPicamera"] = []
 
     def __init__(self, camera_index: int = 0) -> None:
         self.camera_index = camera_index
+        type(self).instances.append(self)
 
     @staticmethod
     def global_camera_info() -> list[dict[str, str]]:
         return [{"Model": "imx708"}]
 
     def create_still_configuration(self, **kwargs: object) -> object:
+        return kwargs
+
+    def create_preview_configuration(self, **kwargs: object) -> object:
+        self.preview_configuration = kwargs
         return kwargs
 
     def configure(self, configuration: object) -> None:
@@ -160,12 +167,177 @@ class StubPicamera:
     def capture_file(self, path: str, format: str | None = None) -> None:
         Path(path).write_bytes(synthetic_jpeg())
 
+    def capture_array(self, name: str = "main") -> object:
+        self.capture_array_name = name
+        return FakeFrame()
+
+    def switch_mode_and_capture_file(
+        self,
+        camera_config: object,
+        file_output: str,
+        name: str = "main",
+        format: str | None = None,
+        **kwargs: object,
+    ) -> None:
+        self.still_arguments = (camera_config, file_output, name, format)
+        Path(file_output).write_bytes(synthetic_jpeg())
+
     def stop(self) -> None:
         pass
 
     def close(self) -> None:
         if self.close_fails:
             raise RuntimeError("secret cleanup")
+
+
+class FakeFrame:
+    shape = (360, 640, 3)
+    dtype = "uint8"
+
+    def tobytes(self) -> bytes:
+        return bytes((1, 2, 3)) * (640 * 360)
+
+
+def test_preview_session_uses_exact_configuration_frames_and_one_camera(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class PreviewRecording(StubPicamera):
+        instances: list["PreviewRecording"] = []
+
+    clock = iter([0.0, 0.0, 1.0])
+    adapter = Picamera2Camera(monotonic=lambda: next(clock))
+    monkeypatch.setattr(
+        adapter,
+        "_load_stack",
+        lambda: (PreviewRecording, LIBCAMERA, ("1.0", "2.0")),
+    )
+
+    session = adapter.open_preview_session()
+
+    assert session is not None
+    instance = PreviewRecording.instances[-1]
+    assert instance.preview_configuration == {
+        "main": {"size": (640, 360), "format": "BGR888"},
+        "buffer_count": 4,
+        "queue": False,
+        "display": None,
+        "encode": None,
+    }
+    frame = session.read_frame()
+    assert frame == PreviewFrame(640, 360, bytes((1, 2, 3)) * (640 * 360))
+    output = tmp_path / "meal.jpg"
+    result = session.capture(output)
+    assert result.ok is True
+    assert len(PreviewRecording.instances) == 1
+    configuration, staging, name, image_format = instance.still_arguments
+    assert configuration == {"main": {"size": (1920, 1080)}}
+    assert Path(staging).suffix == ".tmp"
+    assert name == "main"
+    assert image_format == "jpeg"
+    assert session.close() is True
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        SimpleNamespace(shape=(360, 640, 3), dtype="uint16", tobytes=lambda: b""),
+        SimpleNamespace(shape=(360, 640, 4), dtype="uint8", tobytes=lambda: b""),
+        SimpleNamespace(
+            shape=(360, 640, 3), dtype="uint8", tobytes=lambda: b"short"
+        ),
+    ],
+)
+def test_preview_frame_validation_rejects_invalid_arrays(frame: object) -> None:
+    assert Picamera2PreviewSession._frame_from_array(frame) is None
+
+
+def test_preview_stop_failure_still_closes_camera(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class StopFailure(StubPicamera):
+        instances: list["StopFailure"] = []
+
+        def __init__(self, camera_index: int = 0) -> None:
+            super().__init__(camera_index)
+            self.closed = False
+
+        def stop(self) -> None:
+            raise RuntimeError("secret stop failure")
+
+        def close(self) -> None:
+            self.closed = True
+
+    adapter = Picamera2Camera()
+    monkeypatch.setattr(
+        adapter,
+        "_load_stack",
+        lambda: (StopFailure, LIBCAMERA, ("1.0", "2.0")),
+    )
+    session = adapter.open_preview_session()
+    assert session is not None
+
+    assert session.close() is False
+    assert StopFailure.instances[-1].closed is True
+
+
+def test_preview_stop_cancellation_still_closes_and_is_reraised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class StopCancellation(StubPicamera):
+        instances: list["StopCancellation"] = []
+
+        def __init__(self, camera_index: int = 0) -> None:
+            super().__init__(camera_index)
+            self.closed = False
+
+        def stop(self) -> None:
+            raise KeyboardInterrupt
+
+        def close(self) -> None:
+            self.closed = True
+
+    adapter = Picamera2Camera()
+    monkeypatch.setattr(
+        adapter,
+        "_load_stack",
+        lambda: (StopCancellation, LIBCAMERA, ("1.0", "2.0")),
+    )
+    session = adapter.open_preview_session()
+    assert session is not None
+
+    with pytest.raises(KeyboardInterrupt):
+        session.close()
+    assert StopCancellation.instances[-1].closed is True
+
+
+def test_preview_frame_cancellation_closes_and_is_reraised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FrameCancellation(StubPicamera):
+        instances: list["FrameCancellation"] = []
+
+        def __init__(self, camera_index: int = 0) -> None:
+            super().__init__(camera_index)
+            self.closed = False
+
+        def capture_array(self, name: str = "main") -> object:
+            raise KeyboardInterrupt
+
+        def close(self) -> None:
+            self.closed = True
+
+    adapter = Picamera2Camera()
+    monkeypatch.setattr(
+        adapter,
+        "_load_stack",
+        lambda: (FrameCancellation, LIBCAMERA, ("1.0", "2.0")),
+    )
+    session = adapter.open_preview_session()
+    assert session is not None
+
+    with pytest.raises(KeyboardInterrupt):
+        session.read_frame()
+    assert FrameCancellation.instances[-1].closed is True
 
 
 def test_capture_file_receives_tmp_staging_path_and_explicit_jpeg_format(

@@ -6,7 +6,12 @@ import os
 from pathlib import Path
 
 from nutribox_pi.adapters.camera_base import CaptureFailure, SafeCameraAdapter
-from nutribox_pi.models import CameraAvailability, CameraCode
+from nutribox_pi.models import (
+    CameraAvailability,
+    CameraCode,
+    CaptureResult,
+    PreviewFrame,
+)
 
 
 def synthetic_jpeg() -> bytes:
@@ -28,6 +33,9 @@ class SimulatedCamera(SafeCameraAdapter):
             "not-applicable",
             "not-applicable",
         )
+
+    def open_preview_session(self) -> SimulatedPreviewSession:
+        return SimulatedPreviewSession(self)
 
     def _capture_to_staging(self, staging: Path) -> None:
         try:
@@ -56,3 +64,23 @@ class SimulatedCamera(SafeCameraAdapter):
                 failure.__cause__ = exc
         if failure is not None:
             raise failure
+
+
+class SimulatedPreviewSession:
+    def __init__(self, camera: SimulatedCamera) -> None:
+        self._camera = camera
+        self._closed = False
+
+    def read_frame(self) -> PreviewFrame | None:
+        if self._closed:
+            return None
+        return PreviewFrame(640, 360, bytes((61, 179, 90)) * (640 * 360))
+
+    def capture(self, output_path: Path, overwrite: bool = False) -> CaptureResult:
+        if self._closed:
+            return self._camera._failure(CameraCode.CAMERA_UNAVAILABLE)
+        return self._camera.capture(output_path, overwrite)
+
+    def close(self) -> bool:
+        self._closed = True
+        return True

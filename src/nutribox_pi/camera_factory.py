@@ -32,6 +32,9 @@ class InvalidConfigurationCamera(SafeCameraAdapter):
     def capture(self, output_path: Path, overwrite: bool = False) -> CaptureResult:
         return self._failure(CameraCode.INVALID_CONFIGURATION)
 
+    def open_preview_session(self) -> None:
+        return None
+
 
 def camera_from_env() -> SafeCameraAdapter:
     try:
