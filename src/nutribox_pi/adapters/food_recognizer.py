@@ -44,7 +44,7 @@ class HttpFoodRecognizer:
                     "POST",
                     f"{self._base_url}/api/ai/recognize-food",
                     timeout=self._timeout,
-                    files={"file": (filename, image)},
+                    files={"file": ("meal.jpg", image, "image/jpeg")},
                 )
                 response.raise_for_status()
         except OSError as exc:

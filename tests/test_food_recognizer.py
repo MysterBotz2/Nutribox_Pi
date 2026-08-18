@@ -76,12 +76,42 @@ def test_recognizer_validates_documented_response_and_sends_one_file(
     assert kwargs["timeout"] == 2
     assert set(kwargs) == {"timeout", "files"}
     assert set(kwargs["files"]) == {"file"}
-    filename, handle = kwargs["files"]["file"]
+    filename, handle, mime_type = kwargs["files"]["file"]
     assert filename == "meal.jpg"
+    assert mime_type == "image/jpeg"
     assert handle.closed is True
     assert "weight_grams" not in repr(kwargs)
     assert "user_id" not in repr(kwargs)
     assert "confidence" not in repr(kwargs)
+
+
+def test_recognizer_prepares_exact_jpeg_multipart_part(tmp_path: Path) -> None:
+    class PreparingSession(FakeSession):
+        def __init__(self, response: FakeResponse) -> None:
+            super().__init__(response)
+            self.prepared: requests.PreparedRequest | None = None
+
+        def request(self, method: str, url: str, **kwargs: Any) -> FakeResponse:
+            self.prepared = requests.Request(
+                method, url, files=kwargs["files"]
+            ).prepare()
+            return super().request(method, url, **kwargs)
+
+    session = PreparingSession(FakeResponse({"foods": [], "source": "gemini"}))
+
+    HttpFoodRecognizer(
+        "https://backend.test", session=session  # type: ignore[arg-type]
+    ).recognize_food(_image(tmp_path))
+
+    assert session.prepared is not None
+    content_type = session.prepared.headers["Content-Type"]
+    assert content_type.startswith("multipart/form-data; boundary=")
+    body = session.prepared.body
+    assert isinstance(body, bytes)
+    multipart = body.decode("latin-1")
+    assert 'name="file"' in multipart
+    assert 'filename="meal.jpg"' in multipart
+    assert "Content-Type: image/jpeg" in multipart
 
 
 @pytest.mark.parametrize(
