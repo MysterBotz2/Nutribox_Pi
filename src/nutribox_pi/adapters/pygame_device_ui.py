@@ -267,6 +267,8 @@ def _apply_action(
         pygame.time.wait(80)
         workflow.perform_capture()
     elif action is UIAction.ANALYZE_MEAL:
+        if image_cache is not None:
+            image_cache.clear()
         workflow.begin_analysis()
         _render(pygame, screen, fonts, workflow, None)
         pygame.event.pump()
@@ -451,7 +453,6 @@ def _render_result(
         _render_nutrition_contents(pygame, screen, fonts, workflow, thumbnail)
         return
     _draw_text(screen, fonts.subheading, "Meal analysis", (400, 55), NUTRIBOX_BLUE)
-    _draw_thumbnail(pygame, screen, thumbnail, (620, 25))
     _draw_card(pygame, screen, (55, 95, 690, 260))
     source = (
         "Simulated recognition"
@@ -508,7 +509,6 @@ def _render_nutrition_contents(
     _draw_text(
         screen, fonts.subheading, "Nutritional Contents", (235, 48), NUTRIBOX_BLUE
     )
-    _draw_thumbnail(pygame, screen, thumbnail, (620, 25))
     food = response.recognized_foods[0].name if response.recognized_foods else "Meal"
     _draw_text(
         screen,
@@ -609,7 +609,6 @@ def _render_recognized_foods(
     thumbnail: Any | None,
 ) -> None:
     _draw_text(screen, fonts.subheading, "Recognized Foods", (235, 54), NUTRIBOX_BLUE)
-    _draw_thumbnail(pygame, screen, thumbnail, (620, 24))
     _draw_card(pygame, screen, (30, 95, 740, 285))
     source = (
         "Simulated recognition"

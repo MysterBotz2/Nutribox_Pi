@@ -27,6 +27,7 @@ from nutribox_pi.device_ui import (
     UIAction,
     UIResult,
     UIScreen,
+    action_at,
     buttons_for,
     scaled_image_size,
 )
@@ -652,6 +653,83 @@ def test_review_and_result_actions_match_pi2a_workflow() -> None:
     for screen in STATUS_SCREENS.values():
         labels = {button.label for button in buttons_for(screen)}
         assert {"Home", "Retake", "Exit"} <= labels
+
+
+def test_home_and_exit_coordinate_actions_are_distinct(tmp_path: Path) -> None:
+    workflow = MealCaptureWorkflow(SimulatedCamera(), _controller(), _store(tmp_path))
+    workflow.screen = UIScreen.CALCULATED
+    home = next(
+        button for button in buttons_for(UIScreen.CALCULATED) if button.label == "Home"
+    )
+    exit_button = next(
+        button for button in buttons_for(UIScreen.CALCULATED) if button.label == "Exit"
+    )
+
+    assert (
+        action_at(UIScreen.CALCULATED, home.rectangle.x + 1, home.rectangle.y + 1)
+        is UIAction.HOME
+    )
+    assert (
+        action_at(
+            UIScreen.CALCULATED,
+            exit_button.rectangle.x + 1,
+            exit_button.rectangle.y + 1,
+        )
+        is UIAction.EXIT
+    )
+    assert (
+        pygame_device_ui._apply_action(
+            object(), object(), object(), workflow, UIAction.HOME
+        )
+        is None
+    )
+    assert workflow.screen is UIScreen.HOME
+    assert pygame_device_ui._apply_action(
+        object(), object(), object(), workflow, UIAction.EXIT
+    ) == UIResult(True, "Nutri-Box UI closed.")
+
+
+def test_see_recognized_foods_action_uses_the_single_valid_transition(
+    tmp_path: Path,
+) -> None:
+    workflow = MealCaptureWorkflow(SimulatedCamera(), _controller(), _store(tmp_path))
+    workflow.screen = UIScreen.CALCULATED
+    button = next(
+        item
+        for item in buttons_for(UIScreen.CALCULATED)
+        if item.label == "See recognized foods"
+    )
+
+    assert button.action is UIAction.SHOW_RECOGNIZED_FOODS
+    assert (
+        pygame_device_ui._apply_action(
+            object(), object(), object(), workflow, button.action
+        )
+        is None
+    )
+    assert workflow.screen is UIScreen.RECOGNIZED_FOODS
+
+
+def test_review_controls_are_separate_and_within_display() -> None:
+    controls = buttons_for(UIScreen.REVIEW)
+    for button in controls:
+        rectangle = button.rectangle
+        assert rectangle.x >= 0 and rectangle.y >= 0
+        assert rectangle.x + rectangle.width <= 800
+        assert rectangle.y + rectangle.height <= 480
+        assert rectangle.height >= 56
+    for index, first in enumerate(controls):
+        for second in controls[index + 1 :]:
+            assert not _rectangles_intersect(first.rectangle, second.rectangle)
+
+
+def _rectangles_intersect(first, second) -> bool:
+    return not (
+        first.x + first.width <= second.x
+        or second.x + second.width <= first.x
+        or first.y + first.height <= second.y
+        or second.y + second.height <= first.y
+    )
 
 
 def test_ui_sources_have_no_direct_network_or_forbidden_contract_fields() -> None:

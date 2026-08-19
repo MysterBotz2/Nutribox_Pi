@@ -68,6 +68,8 @@ class UIScreen(StrEnum):
 class UIAction(StrEnum):
     ANALYZE = "analyze"
     ANALYZE_MEAL = "analyze_meal"
+    SHOW_RECOGNIZED_FOODS = "show_recognized_foods"
+    ANALYZE_AGAIN = "analyze_again"
     CAPTURE = "capture"
     BACK = "back"
     RETAKE = "retake"
@@ -123,14 +125,14 @@ def buttons_for(screen: UIScreen) -> tuple[ButtonLayout, ...]:
     if screen is UIScreen.REVIEW:
         return (
             ButtonLayout(
-                UIAction.RETAKE, "Retake", TouchRect(70, 394, 300, 66), "card"
+                UIAction.RETAKE, "Retake", TouchRect(500, 404, 130, 56), "card"
             ),
             ButtonLayout(
                 UIAction.ANALYZE_MEAL,
                 "Start meal analysis",
-                TouchRect(430, 394, 300, 66),
+                TouchRect(510, 320, 260, 64),
             ),
-            EXIT_BUTTON,
+            ButtonLayout(UIAction.EXIT, "Exit", TouchRect(640, 404, 130, 56), "danger"),
         )
     if screen is UIScreen.ANALYZING:
         return (
@@ -139,6 +141,19 @@ def buttons_for(screen: UIScreen) -> tuple[ButtonLayout, ...]:
                 "Analyzing...",
                 TouchRect(240, 318, 320, 88),
                 enabled=False,
+            ),
+            EXIT_BUTTON,
+        )
+    if screen is UIScreen.CALCULATED:
+        return (
+            ButtonLayout(
+                UIAction.RETAKE, "Retake", TouchRect(70, 330, 300, 76), "card"
+            ),
+            ButtonLayout(UIAction.HOME, "Home", TouchRect(430, 330, 300, 76)),
+            ButtonLayout(
+                UIAction.SHOW_RECOGNIZED_FOODS,
+                "See recognized foods",
+                TouchRect(430, 240, 300, 64),
             ),
             EXIT_BUTTON,
         )
@@ -155,7 +170,12 @@ def buttons_for(screen: UIScreen) -> tuple[ButtonLayout, ...]:
             ButtonLayout(
                 UIAction.RETAKE, "Retake", TouchRect(70, 394, 300, 66), "card"
             ),
-            ButtonLayout(UIAction.HOME, "Home", TouchRect(430, 394, 300, 66)),
+            ButtonLayout(
+                UIAction.ANALYZE_AGAIN,
+                "Analyze again",
+                TouchRect(430, 394, 300, 66),
+            ),
+            ButtonLayout(UIAction.HOME, "Home", TouchRect(430, 320, 300, 56), "card"),
             EXIT_BUTTON,
         )
     return (
