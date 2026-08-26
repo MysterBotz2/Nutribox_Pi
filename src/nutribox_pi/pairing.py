@@ -31,6 +31,12 @@ class PairingState(StrEnum):
     ERROR = "error"
 
 
+class VerificationReason(StrEnum):
+    STARTUP = "startup"
+    NEW_PAIRING = "new_pairing"
+    PERIODIC = "periodic"
+
+
 class CredentialError(RuntimeError):
     pass
 
@@ -119,6 +125,8 @@ class PairingWorkflow:
     _generation: int = field(init=False, default=0, repr=False)
     _verified_token: str | None = field(init=False, default=None, repr=False)
     _next_verify: float = field(init=False, default=0.0, repr=False)
+    greeting: str | None = field(init=False, default=None)
+    _verification_reason: VerificationReason | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         self._executor = (
@@ -149,6 +157,7 @@ class PairingWorkflow:
             return
         if token is not None:
             self._verification_token = token
+            self._verification_reason = VerificationReason.STARTUP
             self.state = PairingState.REQUESTING
             self._future = self._executor.submit(self.client.device_me, token)
 
@@ -177,11 +186,14 @@ class PairingWorkflow:
                         self._error(PAIRING_ERROR)
                         return
                     self.device = None
+                    self.greeting = None
                     self._clear_transient()
                     self._verified_token = None
                     self.state = PairingState.UNPAIRED
                     self.error_message = REVOKED_MESSAGE
                 elif self.state is PairingState.PAIRED:
+                    self.device = None
+                    self.greeting = None
                     self._next_verify = self.monotonic() + VERIFY_INTERVAL_SECONDS
                 else:
                     self._error(str(exc))
@@ -213,11 +225,17 @@ class PairingWorkflow:
                 self.device = result
                 self.state = PairingState.PAIRED
                 self._verified_token = self._verification_token
+                self.greeting = (
+                    f"Welcome back, {result.owner_first_name}!"
+                    if self._verification_reason is VerificationReason.STARTUP
+                    else f"Hello, {result.owner_first_name}!"
+                )
                 self._clear_transient()
                 self._next_verify = self.monotonic() + VERIFY_INTERVAL_SECONDS
                 return
             if self.state is PairingState.PAIRED and isinstance(result, DeviceIdentity):
                 self.device = result
+                self.greeting = None
                 self._next_verify = self.monotonic() + VERIFY_INTERVAL_SECONDS
                 return
             if self.state is PairingState.WAITING and isinstance(result, PairingStatus):
@@ -227,6 +245,7 @@ class PairingWorkflow:
                 elif result is PairingStatus.PAIRED:
                     assert self._session is not None
                     self._verification_token = self._session.device_token
+                    self._verification_reason = VerificationReason.NEW_PAIRING
                     self.state = PairingState.REQUESTING
                     self._future = self._executor.submit(
                         self.client.device_me, self._verification_token
@@ -248,6 +267,7 @@ class PairingWorkflow:
             self._future = self._executor.submit(
                 self.client.device_me, self._verified_token
             )
+            self._verification_reason = VerificationReason.PERIODIC
 
     def _poll(self) -> PairingStatus:
         assert self._session is not None
@@ -278,6 +298,7 @@ class PairingWorkflow:
         self._future = None
         self._session = None
         self._verification_token = None
+        self._verification_reason = None
         self.code = None
         self.expires_at = None
 

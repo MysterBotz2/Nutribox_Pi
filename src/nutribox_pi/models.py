@@ -97,6 +97,7 @@ class DeviceIdentity:
     device_type: str
     paired_at: str
     last_seen_at: str | None
+    owner_first_name: str = ""
 
 
 @dataclass(frozen=True, slots=True)

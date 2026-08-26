@@ -420,7 +420,10 @@ def _render_home(
         SECONDARY_TEXT,
     )
     if workflow.pairing is not None and workflow.pairing.state is PairingState.PAIRED:
-        _draw_text(screen, fonts.small, "Device paired", (400, 235), SECONDARY_TEXT)
+        name = _ellipsize(fonts.small, workflow.pairing.device.owner_first_name, 300)
+        _draw_text(
+            screen, fonts.small, f"Paired with {name}", (400, 235), SECONDARY_TEXT
+        )
     elif workflow.pairing is not None and workflow.pairing.error_message:
         _draw_text(
             screen,
@@ -442,11 +445,7 @@ def _render_pairing(
     elif workflow.screen is UIScreen.PAIR_WAITING:
         message = pairing.code or "Waiting for pairing code..."
     elif workflow.screen is UIScreen.PAIR_PAIRED:
-        message = (
-            f"Device paired: {pairing.device.name}"
-            if pairing.device
-            else "Device paired."
-        )
+        message = pairing.greeting or "Device paired."
     elif workflow.screen is UIScreen.PAIR_EXPIRED:
         message = "Pairing code expired."
     elif workflow.screen is UIScreen.PAIR_ERROR:

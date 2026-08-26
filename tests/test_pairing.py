@@ -92,6 +92,40 @@ def test_pairing_http_errors_are_safe(status: int, message: str) -> None:
     assert "secret-token" not in str(error.value)
 
 
+@pytest.mark.parametrize("name", ["Maya", "  Maya  "])
+def test_device_identity_parses_required_owner_first_name(name: str) -> None:
+    payload = {
+        "id": 1,
+        "name": "Pi",
+        "device_type": "pi",
+        "paired_at": "now",
+        "last_seen_at": None,
+        "owner_first_name": name,
+    }
+    client = DevicePairingClient(
+        "https://backend.test", session=Session(Response(200, payload))
+    )  # type: ignore[arg-type]
+    assert client.device_me("secret").owner_first_name == "Maya"
+
+
+@pytest.mark.parametrize("name", [None, "", "   ", 5, "x" * 81])
+def test_device_identity_rejects_invalid_owner_first_name_safely(name: object) -> None:
+    payload = {
+        "id": 1,
+        "name": "Pi",
+        "device_type": "pi",
+        "paired_at": "now",
+        "last_seen_at": None,
+        "owner_first_name": name,
+    }
+    client = DevicePairingClient(
+        "https://backend.test", session=Session(Response(200, payload))
+    )  # type: ignore[arg-type]
+    with pytest.raises(PairingError) as error:
+        client.device_me("secret")
+    assert "secret" not in str(error.value) and "Pi" not in str(error.value)
+
+
 def test_private_atomic_credential_store_and_symlink_rejection(tmp_path: Path) -> None:
     store = DeviceCredentialStore(tmp_path)
     store.save("secret")
@@ -263,7 +297,9 @@ def test_pairing_transition_renders_only_verified_name(
     assert pairing.state is PairingState.WAITING and pairing.code == "123456"
     pairing._future = _future(PairingStatus.PAIRED)
     pairing.tick()
-    executor.calls[-1][2].set_result(DeviceIdentity(1, "Kitchen Pi", "pi", "now", None))
+    executor.calls[-1][2].set_result(
+        DeviceIdentity(1, "Kitchen Pi", "pi", "now", None, "Maya")
+    )
     pairing.tick()
     drawn: list[str] = []
     monkeypatch.setattr(
@@ -277,7 +313,7 @@ def test_pairing_transition_renders_only_verified_name(
         SimpleNamespace(pairing=pairing, screen=UIScreen.PAIR_PAIRED),
     )
     output = " ".join(drawn)
-    assert pairing.state is PairingState.PAIRED and "Kitchen Pi" in output
+    assert pairing.state is PairingState.PAIRED and "Hello, Maya!" in output
     assert "session" not in output and "token" not in output
 
 
@@ -445,5 +481,54 @@ def test_post_pin_periodic_503_retains_pairing(tmp_path: Path) -> None:
     pairing.tick()
     executor.calls[0][2].set_exception(PairingError(PAIRING_UNAVAILABLE))
     pairing.tick()
-    assert pairing.state is PairingState.PAIRED and pairing.device is not None
+    assert pairing.state is PairingState.PAIRED and pairing.device is None
     assert store.load() == "token"
+
+
+def test_startup_greeting_and_home_acknowledgement_are_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DeviceCredentialStore(tmp_path)
+    store.save("token")
+    executor = ManualExecutor()
+    pairing = PairingWorkflow(
+        PairingFake(),
+        store,
+        executor_factory=lambda: executor,  # type: ignore[arg-type]
+    )
+    pairing.startup_verify()
+    executor.calls[0][2].set_result(
+        DeviceIdentity(1, "Pi", "pi", "now", None, "A" * 80)
+    )
+    pairing.tick()
+    assert pairing.greeting == f"Welcome back, {'A' * 80}!"
+    drawn: list[str] = []
+    monkeypatch.setattr(
+        pygame_device_ui, "_draw_text", lambda *args: drawn.append(args[2])
+    )
+    monkeypatch.setattr(pygame_device_ui, "_draw_card", lambda *args: None)
+    fonts = SimpleNamespace(
+        heading=object(),
+        body=object(),
+        small=SimpleNamespace(size=lambda text: (len(text) * 10, 20)),
+    )
+    pygame_device_ui._render_home(
+        object(), object(), fonts, SimpleNamespace(pairing=pairing)
+    )
+    assert any(text.startswith("Paired with ") and len(text) < 100 for text in drawn)
+
+
+def test_revocation_output_and_storage_contain_no_profile_data(tmp_path: Path) -> None:
+    store = DeviceCredentialStore(tmp_path)
+    store.save("token")
+    assert "owner_first_name" not in store.path.read_text()
+    pairing = PairingWorkflow(PairingFake(), store)
+    pairing.state = PairingState.PAIRED
+    pairing.device = DeviceIdentity(7, "Pi", "pi", "now", None, "Maya")
+    pairing._verified_token = "token"
+    revoked: Future[object] = Future()
+    revoked.set_exception(PairingError(DEVICE_AUTH_FAILED))
+    pairing._future = revoked
+    pairing.tick()
+    assert pairing.device is None and pairing.greeting is None and store.load() is None
+    assert pairing.error_message == REVOKED_MESSAGE

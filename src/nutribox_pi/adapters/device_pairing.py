@@ -91,6 +91,7 @@ class DevicePairingClient:
                 payload["device_type"],
                 payload["paired_at"],
                 payload["last_seen_at"],
+                payload["owner_first_name"],
             )
         except KeyError as exc:
             raise PairingError(PAIRING_FAILED) from exc
@@ -98,9 +99,12 @@ class DevicePairingClient:
             not isinstance(values[0], int)
             or not all(isinstance(value, str) and value for value in values[1:4])
             or not (values[4] is None or isinstance(values[4], str))
+            or not isinstance(values[5], str)
+            or not values[5].strip()
+            or len(values[5].strip()) > 80
         ):
             raise PairingError(PAIRING_FAILED)
-        return DeviceIdentity(*values)
+        return DeviceIdentity(*values[:5], values[5].strip())
 
     def _json(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         try:
