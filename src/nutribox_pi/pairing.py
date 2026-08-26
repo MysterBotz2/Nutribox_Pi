@@ -17,7 +17,9 @@ from nutribox_pi.models import DeviceIdentity, PairingSession, PairingStatus
 from nutribox_pi.ports import DevicePairing
 
 POLL_INTERVAL_SECONDS = 3.0
+VERIFY_INTERVAL_SECONDS = 30.0
 PAIRING_ERROR = "Device pairing is unavailable."
+REVOKED_MESSAGE = "Device pairing was revoked."
 
 
 class PairingState(StrEnum):
@@ -115,6 +117,8 @@ class PairingWorkflow:
     _verification_token: str | None = field(init=False, default=None, repr=False)
     _next_poll: float = field(init=False, default=0.0, repr=False)
     _generation: int = field(init=False, default=0, repr=False)
+    _verified_token: str | None = field(init=False, default=None, repr=False)
+    _next_verify: float = field(init=False, default=0.0, repr=False)
 
     def __post_init__(self) -> None:
         self._executor = (
@@ -169,7 +173,12 @@ class PairingWorkflow:
                     except CredentialError:
                         self._error(PAIRING_ERROR)
                         return
+                    self.device = None
+                    self._verified_token = None
                     self.state = PairingState.UNPAIRED
+                    self.error_message = REVOKED_MESSAGE
+                elif self.state is PairingState.PAIRED:
+                    self._next_verify = self.monotonic() + VERIFY_INTERVAL_SECONDS
                 else:
                     self._error(str(exc))
                 return
@@ -199,7 +208,13 @@ class PairingWorkflow:
                         return
                 self.device = result
                 self.state = PairingState.PAIRED
+                self._verified_token = self._verification_token
                 self._verification_token = None
+                self._next_verify = self.monotonic() + VERIFY_INTERVAL_SECONDS
+                return
+            if self.state is PairingState.PAIRED and isinstance(result, DeviceIdentity):
+                self.device = result
+                self._next_verify = self.monotonic() + VERIFY_INTERVAL_SECONDS
                 return
             if self.state is PairingState.WAITING and isinstance(result, PairingStatus):
                 if result is PairingStatus.EXPIRED:
@@ -219,6 +234,16 @@ class PairingWorkflow:
         ):
             self._next_poll = self.monotonic() + POLL_INTERVAL_SECONDS
             self._future = self._executor.submit(self._poll)
+        if (
+            self.state is PairingState.PAIRED
+            and self._future is None
+            and self._verified_token is not None
+            and self.monotonic() >= self._next_verify
+        ):
+            self._next_verify = self.monotonic() + VERIFY_INTERVAL_SECONDS
+            self._future = self._executor.submit(
+                self.client.device_me, self._verified_token
+            )
 
     def _poll(self) -> PairingStatus:
         assert self._session is not None
@@ -245,6 +270,7 @@ class PairingWorkflow:
         self._future = None
         self._session = None
         self._verification_token = None
+        self._verified_token = None
         self.code = None
         self.expires_at = None
 

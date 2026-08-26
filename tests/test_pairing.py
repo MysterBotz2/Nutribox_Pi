@@ -19,6 +19,8 @@ from nutribox_pi.adapters.device_pairing import (
 from nutribox_pi.device_ui import UIAction, UIScreen
 from nutribox_pi.models import DeviceIdentity, PairingSession, PairingStatus
 from nutribox_pi.pairing import (
+    REVOKED_MESSAGE,
+    VERIFY_INTERVAL_SECONDS,
     CredentialError,
     DeviceCredentialStore,
     PairingState,
@@ -316,3 +318,57 @@ def test_startup_verification_refuses_new_pairing(tmp_path: Path) -> None:
     pairing.startup_verify()
     assert pairing.state is PairingState.REQUESTING
     assert pairing.start() is False and len(executor.calls) == 1
+
+
+def test_live_verification_is_bounded_and_handles_revocation(tmp_path: Path) -> None:
+    clock = [0.0]
+    store = DeviceCredentialStore(tmp_path)
+    store.save("verified-token")
+    executor = ManualExecutor()
+    pairing = PairingWorkflow(
+        PairingFake(),
+        store,
+        monotonic=lambda: clock[0],
+        executor_factory=lambda: executor,  # type: ignore[arg-type]
+    )
+    pairing.state = PairingState.PAIRED
+    pairing.device = DeviceIdentity(1, "Kitchen Pi", "pi", "now", None)
+    pairing._verified_token = "verified-token"
+    pairing._next_verify = VERIFY_INTERVAL_SECONDS
+    pairing.tick()
+    assert executor.calls == []
+    clock[0] = VERIFY_INTERVAL_SECONDS
+    pairing.tick()
+    assert len(executor.calls) == 1 and executor.calls[0][1] == ("verified-token",)
+    pairing.tick()
+    assert len(executor.calls) == 1
+    executor.calls[0][2].set_result(
+        DeviceIdentity(1, "Updated Pi", "pi", "later", None)
+    )
+    pairing.tick()
+    assert pairing.state is PairingState.PAIRED and pairing.device.name == "Updated Pi"
+    clock[0] += VERIFY_INTERVAL_SECONDS
+    pairing.tick()
+    executor.calls[-1][2].set_exception(PairingError(DEVICE_AUTH_FAILED))
+    pairing.tick()
+    assert pairing.state is PairingState.UNPAIRED and store.load() is None
+    assert pairing.error_message == REVOKED_MESSAGE
+
+
+def test_transient_live_verification_failure_retains_credential(tmp_path: Path) -> None:
+    executor = ManualExecutor()
+    store = DeviceCredentialStore(tmp_path)
+    store.save("verified-token")
+    pairing = PairingWorkflow(
+        PairingFake(),
+        store,
+        monotonic=lambda: 30.0,
+        executor_factory=lambda: executor,  # type: ignore[arg-type]
+    )
+    pairing.state = PairingState.PAIRED
+    pairing.device = DeviceIdentity(1, "Kitchen Pi", "pi", "now", None)
+    pairing._verified_token, pairing._next_verify = "verified-token", 0.0
+    pairing.tick()
+    executor.calls[0][2].set_exception(PairingError("Device pairing is unavailable."))
+    pairing.tick()
+    assert pairing.state is PairingState.PAIRED and store.load() == "verified-token"
