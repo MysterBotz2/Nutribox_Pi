@@ -104,7 +104,9 @@ class ButtonLayout:
 EXIT_BUTTON = ButtonLayout(UIAction.EXIT, "Exit", TouchRect(660, 20, 110, 58), "danger")
 
 
-def buttons_for(screen: UIScreen) -> tuple[ButtonLayout, ...]:
+def buttons_for(
+    screen: UIScreen, pairing_state: PairingState | None = None
+) -> tuple[ButtonLayout, ...]:
     if screen is UIScreen.HOME:
         return (
             ButtonLayout(
@@ -112,12 +114,7 @@ def buttons_for(screen: UIScreen) -> tuple[ButtonLayout, ...]:
                 "Analyze Meal",
                 TouchRect(180, 250, 440, 76),
             ),
-            ButtonLayout(
-                UIAction.PAIR_DEVICE,
-                "Pair Device",
-                TouchRect(180, 342, 440, 76),
-                "card",
-            ),
+            _home_pairing_button(pairing_state),
             EXIT_BUTTON,
         )
     if screen is UIScreen.CAPTURE:
@@ -212,8 +209,32 @@ def buttons_for(screen: UIScreen) -> tuple[ButtonLayout, ...]:
     )
 
 
-def action_at(screen: UIScreen, x: float, y: float) -> UIAction | None:
-    for button in buttons_for(screen):
+def _home_pairing_button(pairing_state: PairingState | None) -> ButtonLayout:
+    if pairing_state is PairingState.PAIRED:
+        return ButtonLayout(
+            UIAction.PAIR_DEVICE,
+            "Device paired",
+            TouchRect(180, 342, 440, 76),
+            "card",
+            enabled=False,
+        )
+    if pairing_state in {PairingState.REQUESTING, PairingState.WAITING}:
+        return ButtonLayout(
+            UIAction.PAIR_DEVICE,
+            "Checking device...",
+            TouchRect(180, 342, 440, 76),
+            "card",
+            enabled=False,
+        )
+    return ButtonLayout(
+        UIAction.PAIR_DEVICE, "Pair Device", TouchRect(180, 342, 440, 76), "card"
+    )
+
+
+def action_at(
+    screen: UIScreen, x: float, y: float, pairing_state: PairingState | None = None
+) -> UIAction | None:
+    for button in buttons_for(screen, pairing_state):
         if button.enabled and button.rectangle.contains(x, y):
             return button.action
     return None

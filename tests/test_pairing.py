@@ -16,7 +16,7 @@ from nutribox_pi.adapters.device_pairing import (
     DevicePairingClient,
     PairingError,
 )
-from nutribox_pi.device_ui import UIAction, UIScreen
+from nutribox_pi.device_ui import UIAction, UIScreen, buttons_for
 from nutribox_pi.models import DeviceIdentity, PairingSession, PairingStatus
 from nutribox_pi.pairing import (
     REVOKED_MESSAGE,
@@ -372,3 +372,17 @@ def test_transient_live_verification_failure_retains_credential(tmp_path: Path) 
     executor.calls[0][2].set_exception(PairingError("Device pairing is unavailable."))
     pairing.tick()
     assert pairing.state is PairingState.PAIRED and store.load() == "verified-token"
+
+
+def test_home_pairing_control_is_disabled_while_checking_or_paired() -> None:
+    def pairing_button(state: PairingState) -> object:
+        return next(
+            button
+            for button in buttons_for(UIScreen.HOME, state)
+            if button.action is UIAction.PAIR_DEVICE
+        )
+
+    assert pairing_button(PairingState.REQUESTING).enabled is False
+    assert pairing_button(PairingState.PAIRED).label == "Device paired"
+    assert pairing_button(PairingState.PAIRED).enabled is False
+    assert pairing_button(PairingState.UNPAIRED).label == "Pair Device"

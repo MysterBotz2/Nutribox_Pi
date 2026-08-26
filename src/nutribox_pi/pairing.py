@@ -17,7 +17,7 @@ from nutribox_pi.models import DeviceIdentity, PairingSession, PairingStatus
 from nutribox_pi.ports import DevicePairing
 
 POLL_INTERVAL_SECONDS = 3.0
-VERIFY_INTERVAL_SECONDS = 30.0
+VERIFY_INTERVAL_SECONDS = 5.0
 PAIRING_ERROR = "Device pairing is unavailable."
 REVOKED_MESSAGE = "Device pairing was revoked."
 

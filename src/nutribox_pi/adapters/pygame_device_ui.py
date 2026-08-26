@@ -216,7 +216,7 @@ def _run_loop(
             pointer = _pointer_event(pygame, event, down=True)
             if pointer is not None:
                 source, point = pointer
-                action = action_at(workflow.screen, *point)
+                action = action_at(workflow.screen, *point, _pairing_state(workflow))
                 if pressed is not None or action is None:
                     continue
                 pressed = _PointerPress(source, workflow.screen, action)
@@ -240,7 +240,10 @@ def _run_loop(
             pressed = None
             if workflow.screen is not active_press.screen:
                 continue
-            if action_at(active_press.screen, *point) is not active_press.action:
+            if (
+                action_at(active_press.screen, *point, _pairing_state(workflow))
+                is not active_press.action
+            ):
                 pressed = None
                 continue
             outcome = _apply_action(
@@ -395,9 +398,13 @@ def _render(
         _render_pairing(pygame, screen, fonts, workflow)
     else:
         _render_error(pygame, screen, fonts, workflow.error_message)
-    for button in buttons_for(workflow.screen):
+    for button in buttons_for(workflow.screen, _pairing_state(workflow)):
         _draw_button(pygame, screen, fonts.button, button, pressed is button.action)
     pygame.display.flip()
+
+
+def _pairing_state(workflow: MealCaptureWorkflow) -> Any:
+    return workflow.pairing.state if workflow.pairing is not None else None
 
 
 def _render_home(
