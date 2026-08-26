@@ -43,6 +43,7 @@ from nutribox_pi.models import (
     PreviewFrame,
     RecognitionSource,
     RecognizedFood,
+    RequiresFoodSelectionResponse,
 )
 
 
@@ -643,6 +644,231 @@ def test_analyze_action_renders_visible_state_before_backend_call(
     assert rendered_states == [UIScreen.ANALYZING]
     assert workflow.screen is UIScreen.CALCULATED
     assert len(backend.calls) == 1
+
+
+def test_stale_analysis_pointer_events_cannot_activate_result_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class SelectionBackend(RecordingBackend):
+        def analyze_meal(
+            self, image_path: Path, weight_grams: float
+        ) -> RequiresFoodSelectionResponse:
+            self.calls.append((image_path, weight_grams))
+            return RequiresFoodSelectionResponse(
+                status=AnalysisStatus.REQUIRES_FOOD_SELECTION,
+                recognized_foods=(RecognizedFood("chicken adobo"),),
+                recognition_source=RecognitionSource.SIMULATED,
+            )
+
+    backend = SelectionBackend()
+    workflow = MealCaptureWorkflow(
+        SimulatedCamera(), _controller(backend), _store(tmp_path)
+    )
+    workflow.analyze()
+    workflow.begin_capture()
+    workflow.perform_capture()
+    assert workflow.screen is UIScreen.REVIEW
+
+    analysis_point = (520, 350)
+    events = iter(
+        [
+            [
+                SimpleNamespace(
+                    type=FakePygame.MOUSEBUTTONDOWN,
+                    button=1,
+                    pos=analysis_point,
+                ),
+                SimpleNamespace(
+                    type=FakePygame.MOUSEBUTTONUP,
+                    button=1,
+                    pos=analysis_point,
+                ),
+                # These duplicate events are from the original gesture.  Their
+                # coordinates overlap the result-screen Home control.
+                SimpleNamespace(
+                    type=FakePygame.MOUSEBUTTONDOWN,
+                    button=1,
+                    pos=analysis_point,
+                ),
+                SimpleNamespace(
+                    type=FakePygame.MOUSEBUTTONUP,
+                    button=1,
+                    pos=analysis_point,
+                ),
+            ],
+            [SimpleNamespace(type=FakePygame.QUIT)],
+        ]
+    )
+    cleared: list[list[int]] = []
+    pygame = SimpleNamespace(
+        QUIT=FakePygame.QUIT,
+        KEYDOWN=FakePygame.KEYDOWN,
+        K_ESCAPE=FakePygame.K_ESCAPE,
+        MOUSEBUTTONDOWN=FakePygame.MOUSEBUTTONDOWN,
+        MOUSEBUTTONUP=FakePygame.MOUSEBUTTONUP,
+        FINGERDOWN=FakePygame.FINGERDOWN,
+        FINGERUP=FakePygame.FINGERUP,
+        event=SimpleNamespace(
+            get=lambda: next(events),
+            pump=lambda: None,
+            clear=lambda types: cleared.append(types),
+        ),
+        time=SimpleNamespace(wait=lambda milliseconds: None),
+    )
+    monkeypatch.setattr(pygame_device_ui, "_render", lambda *args: None)
+
+    result = pygame_device_ui._run_loop(pygame, object(), object(), workflow)
+
+    assert result == UIResult(True, "Nutri-Box UI closed.")
+    assert workflow.screen is UIScreen.REQUIRES_FOOD_SELECTION
+    assert workflow.recognized_foods == (RecognizedFood("chicken adobo"),)
+    assert len(backend.calls) == 1
+    assert cleared == [[5, 6, 7, 8]]
+
+
+def test_deliberate_home_after_result_transition_is_still_processed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = _captured_workflow(tmp_path)
+    workflow.begin_analysis()
+    workflow.perform_analysis()
+    assert workflow.screen is UIScreen.CALCULATED
+    home = next(
+        button
+        for button in buttons_for(UIScreen.CALCULATED)
+        if button.action is UIAction.HOME
+    )
+    home_point = (home.rectangle.x + 1, home.rectangle.y + 1)
+    events = iter(
+        [
+            [
+                SimpleNamespace(
+                    type=FakePygame.MOUSEBUTTONDOWN, button=1, pos=home_point
+                ),
+                SimpleNamespace(
+                    type=FakePygame.MOUSEBUTTONUP, button=1, pos=home_point
+                ),
+            ],
+            [SimpleNamespace(type=FakePygame.QUIT)],
+        ]
+    )
+    pygame = SimpleNamespace(
+        QUIT=FakePygame.QUIT,
+        KEYDOWN=FakePygame.KEYDOWN,
+        K_ESCAPE=FakePygame.K_ESCAPE,
+        MOUSEBUTTONDOWN=FakePygame.MOUSEBUTTONDOWN,
+        MOUSEBUTTONUP=FakePygame.MOUSEBUTTONUP,
+        FINGERDOWN=FakePygame.FINGERDOWN,
+        FINGERUP=FakePygame.FINGERUP,
+        event=SimpleNamespace(get=lambda: next(events), clear=lambda types: None),
+        time=SimpleNamespace(wait=lambda milliseconds: None),
+    )
+    monkeypatch.setattr(pygame_device_ui, "_render", lambda *args: None)
+
+    result = pygame_device_ui._run_loop(pygame, object(), object(), workflow)
+
+    assert result == UIResult(True, "Nutri-Box UI closed.")
+    assert workflow.screen is UIScreen.HOME
+
+
+def test_stale_capture_pointer_events_cannot_repeat_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class CountingCamera(RecordingPreviewCamera):
+        capture_calls = 0
+
+        def capture(self, output_path: Path, overwrite: bool = False) -> CaptureResult:
+            self.capture_calls += 1
+            return super().capture(output_path, overwrite)
+
+    camera = CountingCamera()
+    workflow = MealCaptureWorkflow(camera, _controller(), _store(tmp_path))
+    workflow.analyze()
+    capture_point = (250, 400)
+    events = iter(
+        [
+            [
+                SimpleNamespace(
+                    type=FakePygame.MOUSEBUTTONDOWN,
+                    button=1,
+                    pos=capture_point,
+                ),
+                SimpleNamespace(
+                    type=FakePygame.MOUSEBUTTONUP,
+                    button=1,
+                    pos=capture_point,
+                ),
+                SimpleNamespace(
+                    type=FakePygame.MOUSEBUTTONDOWN,
+                    button=1,
+                    pos=capture_point,
+                ),
+                SimpleNamespace(
+                    type=FakePygame.MOUSEBUTTONUP,
+                    button=1,
+                    pos=capture_point,
+                ),
+            ],
+            [SimpleNamespace(type=FakePygame.QUIT)],
+        ]
+    )
+    pygame = SimpleNamespace(
+        QUIT=FakePygame.QUIT,
+        KEYDOWN=FakePygame.KEYDOWN,
+        K_ESCAPE=FakePygame.K_ESCAPE,
+        MOUSEBUTTONDOWN=FakePygame.MOUSEBUTTONDOWN,
+        MOUSEBUTTONUP=FakePygame.MOUSEBUTTONUP,
+        FINGERDOWN=FakePygame.FINGERDOWN,
+        FINGERUP=FakePygame.FINGERUP,
+        event=SimpleNamespace(
+            get=lambda: next(events),
+            pump=lambda: None,
+            clear=lambda types: None,
+        ),
+        time=SimpleNamespace(wait=lambda milliseconds: None),
+    )
+    monkeypatch.setattr(pygame_device_ui, "_render", lambda *args: None)
+    monkeypatch.setattr(
+        pygame_device_ui._PreviewSurfaceCache, "update", lambda *args: None
+    )
+
+    result = pygame_device_ui._run_loop(pygame, object(), object(), workflow)
+
+    assert result == UIResult(True, "Nutri-Box UI closed.")
+    assert workflow.screen is UIScreen.REVIEW
+    assert camera.capture_calls == 1
+
+
+def test_pointer_events_preserve_mouse_and_native_finger_input() -> None:
+    pygame = SimpleNamespace(
+        MOUSEBUTTONDOWN=FakePygame.MOUSEBUTTONDOWN,
+        MOUSEBUTTONUP=FakePygame.MOUSEBUTTONUP,
+        FINGERDOWN=FakePygame.FINGERDOWN,
+        FINGERUP=FakePygame.FINGERUP,
+    )
+
+    mouse = pygame_device_ui._pointer_event(
+        pygame,
+        SimpleNamespace(
+            type=FakePygame.MOUSEBUTTONDOWN,
+            button=1,
+            pos=(120, 140),
+        ),
+        down=True,
+    )
+    finger = pygame_device_ui._pointer_event(
+        pygame,
+        SimpleNamespace(
+            type=FakePygame.FINGERDOWN,
+            finger_id=9,
+            x=0.5,
+            y=0.25,
+        ),
+        down=True,
+    )
+
+    assert mouse == (("mouse", None), (120.0, 140.0))
+    assert finger == (("finger", 9), (400.0, 120.0))
 
 
 def test_review_and_result_actions_match_pi2a_workflow() -> None:

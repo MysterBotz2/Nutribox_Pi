@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import time
 from contextlib import suppress
+from dataclasses import dataclass
 from typing import Any
 
 from nutribox_pi.camera_factory import camera_from_env
@@ -166,13 +167,22 @@ class _Fonts:
         self.button = button
 
 
+@dataclass(frozen=True, slots=True)
+class _PointerPress:
+    """A gesture bound to the screen and input source where it began."""
+
+    source: tuple[str, int | None]
+    screen: UIScreen
+    action: UIAction
+
+
 def _run_loop(
     pygame: Any,
     screen: Any,
     fonts: _Fonts,
     workflow: MealCaptureWorkflow,
 ) -> UIResult:
-    pressed: UIAction | None = None
+    pressed: _PointerPress | None = None
     next_preview_at = 0.0
     preview_cache = _PreviewSurfaceCache()
     image_cache = _UiImageCache()
@@ -200,38 +210,52 @@ def _run_loop(
                 return UIResult(True, UI_CLOSED)
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                 return UIResult(True, UI_CLOSED)
-            point = _pointer_point(pygame, event, down=True)
-            if point is not None:
-                pressed = action_at(workflow.screen, *point)
+            pointer = _pointer_event(pygame, event, down=True)
+            if pointer is not None:
+                source, point = pointer
+                action = action_at(workflow.screen, *point)
+                if pressed is not None or action is None:
+                    continue
+                pressed = _PointerPress(source, workflow.screen, action)
                 _render(
                     pygame,
                     screen,
                     fonts,
                     workflow,
-                    pressed,
+                    pressed.action,
                     preview_cache.surface,
                     image_cache,
                 )
                 continue
-            point = _pointer_point(pygame, event, down=False)
-            if point is None:
+            pointer = _pointer_event(pygame, event, down=False)
+            if pointer is None:
                 continue
-            action = action_at(workflow.screen, *point)
-            if pressed is not None and pressed is not action:
-                pressed = None
+            source, point = pointer
+            active_press = pressed
+            if active_press is None or source != active_press.source:
                 continue
             pressed = None
+            if workflow.screen is not active_press.screen:
+                continue
+            if action_at(active_press.screen, *point) is not active_press.action:
+                pressed = None
+                continue
             outcome = _apply_action(
                 pygame,
                 screen,
                 fonts,
                 workflow,
-                action,
+                active_press.action,
                 preview_cache.surface,
                 image_cache,
             )
             if outcome is not None:
                 return outcome
+            if workflow.screen is not active_press.screen:
+                _discard_pointer_events(pygame)
+                # The rest of this batch originated before the synchronous
+                # transition.  Never reinterpret it against the new screen.
+                break
         if workflow.screen is UIScreen.CAPTURE:
             remaining = next_preview_at - time.monotonic()
             if remaining > 0:
@@ -264,7 +288,6 @@ def _apply_action(
         workflow.begin_capture()
         _render(pygame, screen, fonts, workflow, None, preview_surface)
         pygame.event.pump()
-        pygame.time.wait(80)
         workflow.perform_capture()
     elif action is UIAction.ANALYZE_MEAL:
         if image_cache is not None:
@@ -272,7 +295,6 @@ def _apply_action(
         workflow.begin_analysis()
         _render(pygame, screen, fonts, workflow, None)
         pygame.event.pump()
-        pygame.time.wait(80)
         workflow.perform_analysis()
     elif action is UIAction.RETAKE:
         if image_cache is not None:
@@ -293,16 +315,33 @@ def _apply_action(
     return None
 
 
-def _pointer_point(
+def _pointer_event(
     pygame: Any, event: Any, *, down: bool
-) -> tuple[float, float] | None:
+) -> tuple[tuple[str, int | None], tuple[float, float]] | None:
     mouse_type = pygame.MOUSEBUTTONDOWN if down else pygame.MOUSEBUTTONUP
     finger_type = pygame.FINGERDOWN if down else pygame.FINGERUP
     if event.type == mouse_type and event.button == 1:
-        return float(event.pos[0]), float(event.pos[1])
+        return ("mouse", None), (float(event.pos[0]), float(event.pos[1]))
     if event.type == finger_type:
-        return event.x * DISPLAY_SIZE[0], event.y * DISPLAY_SIZE[1]
+        finger_id = getattr(event, "finger_id", getattr(event, "touch_id", None))
+        return (
+            ("finger", finger_id),
+            (event.x * DISPLAY_SIZE[0], event.y * DISPLAY_SIZE[1]),
+        )
     return None
+
+
+def _discard_pointer_events(pygame: Any) -> None:
+    clear = getattr(pygame.event, "clear", None)
+    if callable(clear):
+        clear(
+            [
+                pygame.MOUSEBUTTONDOWN,
+                pygame.MOUSEBUTTONUP,
+                pygame.FINGERDOWN,
+                pygame.FINGERUP,
+            ]
+        )
 
 
 def _render(
