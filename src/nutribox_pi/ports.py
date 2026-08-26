@@ -31,8 +31,12 @@ class Backend(Protocol):
     def health(self) -> HealthResult: ...
 
     def analyze_meal(
-        self, image_path: Path, weight_grams: float
+        self, image_path: Path, weight_grams: float, device_token: str | None = None
     ) -> MealAnalysisResponse | AnalysisResult: ...
+
+
+class VerifiedDeviceCredentialProvider(Protocol):
+    def get_verified_device_token(self) -> str | None: ...
 
 
 class FoodRecognizer(Protocol):

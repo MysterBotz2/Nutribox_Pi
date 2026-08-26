@@ -193,7 +193,7 @@ def test_cli_device_ui_exit_codes(
 ) -> None:
     monkeypatch.setenv("NUTRIBOX_API_BASE_URL", "https://backend.test")
     controller = FakeController()
-    monkeypatch.setattr(cli, "_controller", lambda settings: controller)
+    monkeypatch.setattr(cli, "_controller", lambda settings, provider=None: controller)
     monkeypatch.setattr(
         cli,
         "run_device_ui",

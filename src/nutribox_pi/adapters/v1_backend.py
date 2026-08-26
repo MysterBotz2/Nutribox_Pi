@@ -50,7 +50,7 @@ class V1BackendClient:
         return HealthResult(healthy=True, payload={})
 
     def analyze_meal(
-        self, image_path: Path, weight_grams: float
+        self, image_path: Path, weight_grams: float, device_token: str | None = None
     ) -> MealAnalysisResponse | AnalysisResult:
         try:
             weight_grams = validate_weight(weight_grams)
@@ -63,11 +63,15 @@ class V1BackendClient:
 
         try:
             with image_path.open("rb") as image:
+                request_options: dict[str, Any] = {}
+                if device_token:
+                    request_options["headers"] = {"X-Device-Token": device_token}
                 response = self._request(
                     "POST",
                     "/api/meals/analyze",
                     files={"file": ("meal.jpg", image, "image/jpeg")},
                     data={"weight_grams": f"{weight_grams:g}"},
+                    **request_options,
                 )
         except OSError as exc:
             raise BackendError(f"cannot read image file: {image_path}") from exc
@@ -105,7 +109,11 @@ class V1BackendClient:
             return FoodNotRecognizedResponse(**common)
         if status is AnalysisStatus.REQUIRES_FOOD_SELECTION:
             return RequiresFoodSelectionResponse(**common)
-        if status is AnalysisStatus.NUTRITION_REFERENCE_NOT_FOUND:
+        if status in {
+            AnalysisStatus.NUTRITION_REFERENCE_NOT_FOUND,
+            AnalysisStatus.REQUIRES_INGREDIENT_VERIFICATION,
+            AnalysisStatus.REQUIRES_RECIPE_CONFIRMATION,
+        }:
             return NutritionReferenceNotFoundResponse(**common)
         nutrition = payload.get("nutrition")
         required = {"calories", "protein", "carbohydrates", "fat", "fiber"}

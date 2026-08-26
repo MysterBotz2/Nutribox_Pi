@@ -14,6 +14,8 @@ class AnalysisStatus(StrEnum):
     FOOD_NOT_RECOGNIZED = "food_not_recognized"
     REQUIRES_FOOD_SELECTION = "requires_food_selection"
     NUTRITION_REFERENCE_NOT_FOUND = "nutrition_reference_not_found"
+    REQUIRES_INGREDIENT_VERIFICATION = "requires_ingredient_verification"
+    REQUIRES_RECIPE_CONFIRMATION = "requires_recipe_confirmation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +121,8 @@ class MealAnalysisResponse:
     recognized_foods: tuple[RecognizedFood, ...]
     recognition_source: RecognitionSource
     measured_weight_grams: float | None = None
+    analysis_session_id: str | None = None
+    analysis_session_expires_at: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

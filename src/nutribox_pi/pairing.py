@@ -125,6 +125,7 @@ class PairingWorkflow:
     _generation: int = field(init=False, default=0, repr=False)
     _verified_token: str | None = field(init=False, default=None, repr=False)
     _next_verify: float = field(init=False, default=0.0, repr=False)
+    _closed: bool = field(init=False, default=False, repr=False)
     greeting: str | None = field(init=False, default=None)
     _verification_reason: VerificationReason | None = field(init=False, default=None)
 
@@ -288,7 +289,13 @@ class PairingWorkflow:
 
     def close(self) -> None:
         self.cancel()
+        self._closed = True
         self._executor.shutdown(wait=False, cancel_futures=True)
+
+    def get_verified_device_token(self) -> str | None:
+        if self._closed or self.state is not PairingState.PAIRED or self.device is None:
+            return None
+        return self._verified_token
 
     def _reset_pending(self) -> None:
         self._clear_transient()

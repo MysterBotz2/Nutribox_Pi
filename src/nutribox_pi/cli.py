@@ -61,7 +61,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "ui":
         try:
             settings = Settings.from_env()
-            controller = _controller(settings)
             pairing = PairingWorkflow(
                 DevicePairingClient(
                     settings.api_base_url, settings.http_timeout_seconds
@@ -69,6 +68,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 DeviceCredentialStore(),
             )
             pairing.startup_verify()
+            controller = _controller(settings, pairing)
         except (BackendError, ConfigurationError, ValueError):
             print(ANALYSIS_ERROR)
             return 1
@@ -122,13 +122,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 2
 
 
-def _controller(settings: Settings) -> NutriBoxController:
+def _controller(
+    settings: Settings, credential_provider: object | None = None
+) -> NutriBoxController:
     return NutriBoxController(
         backend=V1BackendClient(
             settings.api_base_url, timeout_seconds=settings.http_timeout_seconds
         ),
         weight_sensor=SimulatedWeightSensor(settings.simulated_weight_grams),
         temperature_sensor=SimulatedTemperatureSensor(settings.simulated_temperature_c),
+        credential_provider=credential_provider,  # type: ignore[arg-type]
     )
 
 

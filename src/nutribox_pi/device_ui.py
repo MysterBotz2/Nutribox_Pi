@@ -49,6 +49,12 @@ RESULT_MESSAGES = {
     AnalysisStatus.NUTRITION_REFERENCE_NOT_FOUND: (
         "Nutrition reference was not found."
     ),
+    AnalysisStatus.REQUIRES_INGREDIENT_VERIFICATION: (
+        "Additional meal confirmation is required."
+    ),
+    AnalysisStatus.REQUIRES_RECIPE_CONFIRMATION: (
+        "Additional meal confirmation is required."
+    ),
 }
 
 
@@ -299,6 +305,12 @@ STATUS_SCREENS = {
     AnalysisStatus.FOOD_NOT_RECOGNIZED: UIScreen.FOOD_NOT_RECOGNIZED,
     AnalysisStatus.REQUIRES_FOOD_SELECTION: UIScreen.REQUIRES_FOOD_SELECTION,
     AnalysisStatus.NUTRITION_REFERENCE_NOT_FOUND: (
+        UIScreen.NUTRITION_REFERENCE_NOT_FOUND
+    ),
+    AnalysisStatus.REQUIRES_INGREDIENT_VERIFICATION: (
+        UIScreen.NUTRITION_REFERENCE_NOT_FOUND
+    ),
+    AnalysisStatus.REQUIRES_RECIPE_CONFIRMATION: (
         UIScreen.NUTRITION_REFERENCE_NOT_FOUND
     ),
 }
