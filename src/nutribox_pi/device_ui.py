@@ -307,8 +307,7 @@ class MealCaptureWorkflow:
         self.analysis_response: MealAnalysisResponse | None = None
 
     def start_pairing(self) -> None:
-        if self.pairing is not None:
-            self.pairing.start()
+        if self.pairing is not None and self.pairing.start():
             self.screen = UIScreen.PAIR_REQUESTING
 
     def tick_pairing(self) -> None:

@@ -125,12 +125,17 @@ class PairingWorkflow:
             )
         )
 
-    def start(self) -> None:
-        if self.state is PairingState.REQUESTING:
-            return
+    def start(self) -> bool:
+        if self.state in {
+            PairingState.REQUESTING,
+            PairingState.WAITING,
+            PairingState.PAIRED,
+        }:
+            return False
         self._reset_pending()
         self.state = PairingState.REQUESTING
         self._future = self._executor.submit(self.client.start, "NutriBox Pi")
+        return True
 
     def startup_verify(self) -> None:
         try:

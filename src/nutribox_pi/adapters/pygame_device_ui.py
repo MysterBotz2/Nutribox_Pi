@@ -36,7 +36,7 @@ from nutribox_pi.device_ui import (
     scaled_image_size,
 )
 from nutribox_pi.models import AnalysisStatus, CalculatedResponse
-from nutribox_pi.pairing import PairingWorkflow, format_countdown
+from nutribox_pi.pairing import PairingState, PairingWorkflow, format_countdown
 from nutribox_pi.ports import PreviewCamera
 
 PRESSED_PRIMARY = (48, 143, 72)
@@ -324,7 +324,6 @@ def _apply_action(
         if workflow.screen in {
             UIScreen.PAIR_REQUESTING,
             UIScreen.PAIR_WAITING,
-            UIScreen.PAIR_PAIRED,
             UIScreen.PAIR_EXPIRED,
             UIScreen.PAIR_ERROR,
         }:
@@ -375,7 +374,7 @@ def _render(
     _draw_grid(pygame, screen)
     cache = image_cache or _UiImageCache()
     if workflow.screen is UIScreen.HOME:
-        _render_home(pygame, screen, fonts)
+        _render_home(pygame, screen, fonts, workflow)
     elif workflow.screen in {UIScreen.CAPTURE, UIScreen.CAPTURING}:
         _render_capture(pygame, screen, fonts, workflow.screen, preview)
     elif workflow.screen is UIScreen.REVIEW:
@@ -401,7 +400,9 @@ def _render(
     pygame.display.flip()
 
 
-def _render_home(pygame: Any, screen: Any, fonts: _Fonts) -> None:
+def _render_home(
+    pygame: Any, screen: Any, fonts: _Fonts, workflow: MealCaptureWorkflow
+) -> None:
     _draw_card(pygame, screen, (90, 105, 620, 170))
     _draw_text(screen, fonts.heading, "Nutri-Box", (400, 150), PRIMARY_TEXT)
     _draw_text(
@@ -411,6 +412,8 @@ def _render_home(pygame: Any, screen: Any, fonts: _Fonts) -> None:
         (400, 213),
         SECONDARY_TEXT,
     )
+    if workflow.pairing is not None and workflow.pairing.state is PairingState.PAIRED:
+        _draw_text(screen, fonts.small, "Device paired", (400, 235), SECONDARY_TEXT)
 
 
 def _render_pairing(

@@ -277,3 +277,42 @@ def test_pairing_transition_renders_only_verified_name(
     output = " ".join(drawn)
     assert pairing.state is PairingState.PAIRED and "Kitchen Pi" in output
     assert "session" not in output and "token" not in output
+
+
+def test_verified_pairing_refuses_new_session_and_home_preserves_state(
+    tmp_path: Path,
+) -> None:
+    store = DeviceCredentialStore(tmp_path)
+    store.save("verified-token")
+    executor = ManualExecutor()
+    pairing = PairingWorkflow(
+        PairingFake(),
+        store,
+        executor_factory=lambda: executor,  # type: ignore[arg-type]
+    )
+    pairing.state = PairingState.PAIRED
+    pairing.device = DeviceIdentity(1, "Kitchen Pi", "pi", "now", None)
+    assert pairing.start() is False
+    assert executor.calls == []
+    ui = SimpleNamespace(screen=UIScreen.PAIR_PAIRED, pairing=pairing)
+    ui.cancel_pairing = lambda: pytest.fail("paired Home must not cancel")
+    ui.home = lambda: setattr(ui, "screen", UIScreen.HOME)
+    assert (
+        pygame_device_ui._apply_action(object(), object(), object(), ui, UIAction.HOME)
+        is None
+    )
+    assert pairing.state is PairingState.PAIRED and store.load() == "verified-token"
+
+
+def test_startup_verification_refuses_new_pairing(tmp_path: Path) -> None:
+    store = DeviceCredentialStore(tmp_path)
+    store.save("verified-token")
+    executor = ManualExecutor()
+    pairing = PairingWorkflow(
+        PairingFake(),
+        store,
+        executor_factory=lambda: executor,  # type: ignore[arg-type]
+    )
+    pairing.startup_verify()
+    assert pairing.state is PairingState.REQUESTING
+    assert pairing.start() is False and len(executor.calls) == 1
