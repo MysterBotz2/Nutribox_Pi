@@ -386,3 +386,64 @@ def test_home_pairing_control_is_disabled_while_checking_or_paired() -> None:
     assert pairing_button(PairingState.PAIRED).label == "Device paired"
     assert pairing_button(PairingState.PAIRED).enabled is False
     assert pairing_button(PairingState.UNPAIRED).label == "Pair Device"
+
+
+def test_post_pin_periodic_401_revokes_and_restores_home_pairing(
+    tmp_path: Path,
+) -> None:
+    clock = [0.0]
+    store = DeviceCredentialStore(tmp_path)
+    executor = ManualExecutor()
+    pairing = PairingWorkflow(
+        PairingFake(),
+        store,
+        monotonic=lambda: clock[0],
+        executor_factory=lambda: executor,  # type: ignore[arg-type]
+    )
+    pairing.start()
+    executor.calls[0][2].set_result(_session())
+    pairing.tick()
+    pairing._future = _future(PairingStatus.PAIRED)
+    pairing.tick()
+    executor.calls[-1][2].set_result(DeviceIdentity(1, "Kitchen Pi", "pi", "now", None))
+    pairing.tick()
+    assert pairing.state is PairingState.PAIRED and store.load() == "token"
+    assert (
+        pairing._session
+        is pairing.code
+        is pairing.expires_at
+        is pairing._verification_token
+        is None
+    )
+    clock[0] = VERIFY_INTERVAL_SECONDS
+    pairing.tick()
+    executor.calls[-1][2].set_exception(PairingError(DEVICE_AUTH_FAILED))
+    pairing.tick()
+    assert pairing.state is PairingState.UNPAIRED and pairing.device is None
+    assert store.load() is None and pairing.error_message == REVOKED_MESSAGE
+    button = next(
+        button
+        for button in buttons_for(UIScreen.HOME, pairing.state)
+        if button.action is UIAction.PAIR_DEVICE
+    )
+    assert button.label == "Pair Device" and button.enabled
+
+
+def test_post_pin_periodic_503_retains_pairing(tmp_path: Path) -> None:
+    executor = ManualExecutor()
+    store = DeviceCredentialStore(tmp_path)
+    store.save("token")
+    pairing = PairingWorkflow(
+        PairingFake(),
+        store,
+        monotonic=lambda: 5.0,
+        executor_factory=lambda: executor,  # type: ignore[arg-type]
+    )
+    pairing.state = PairingState.PAIRED
+    pairing.device = DeviceIdentity(1, "Kitchen Pi", "pi", "now", None)
+    pairing._verified_token, pairing._next_verify = "token", 0.0
+    pairing.tick()
+    executor.calls[0][2].set_exception(PairingError(PAIRING_UNAVAILABLE))
+    pairing.tick()
+    assert pairing.state is PairingState.PAIRED and pairing.device is not None
+    assert store.load() == "token"

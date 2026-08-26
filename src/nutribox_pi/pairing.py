@@ -167,13 +167,17 @@ class PairingWorkflow:
             try:
                 result = future.result()
             except PairingError as exc:
-                if str(exc) == DEVICE_AUTH_FAILED and self._session is None:
+                if str(exc) == DEVICE_AUTH_FAILED and (
+                    self._verification_token is not None
+                    or self._verified_token is not None
+                ):
                     try:
                         self.store.remove()
                     except CredentialError:
                         self._error(PAIRING_ERROR)
                         return
                     self.device = None
+                    self._clear_transient()
                     self._verified_token = None
                     self.state = PairingState.UNPAIRED
                     self.error_message = REVOKED_MESSAGE
@@ -209,7 +213,7 @@ class PairingWorkflow:
                 self.device = result
                 self.state = PairingState.PAIRED
                 self._verified_token = self._verification_token
-                self._verification_token = None
+                self._clear_transient()
                 self._next_verify = self.monotonic() + VERIFY_INTERVAL_SECONDS
                 return
             if self.state is PairingState.PAIRED and isinstance(result, DeviceIdentity):
@@ -267,10 +271,13 @@ class PairingWorkflow:
         self._executor.shutdown(wait=False, cancel_futures=True)
 
     def _reset_pending(self) -> None:
+        self._clear_transient()
+        self._verified_token = None
+
+    def _clear_transient(self) -> None:
         self._future = None
         self._session = None
         self._verification_token = None
-        self._verified_token = None
         self.code = None
         self.expires_at = None
 

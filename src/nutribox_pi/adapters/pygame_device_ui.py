@@ -421,6 +421,14 @@ def _render_home(
     )
     if workflow.pairing is not None and workflow.pairing.state is PairingState.PAIRED:
         _draw_text(screen, fonts.small, "Device paired", (400, 235), SECONDARY_TEXT)
+    elif workflow.pairing is not None and workflow.pairing.error_message:
+        _draw_text(
+            screen,
+            fonts.small,
+            workflow.pairing.error_message,
+            (400, 235),
+            SECONDARY_TEXT,
+        )
 
 
 def _render_pairing(
