@@ -197,7 +197,7 @@ def test_cli_device_ui_exit_codes(
     monkeypatch.setattr(
         cli,
         "run_device_ui",
-        lambda *, controller, simulated_weight: result,
+        lambda *, controller, simulated_weight, pairing: result,
     )
 
     assert cli.main(["ui"]) == expected_exit

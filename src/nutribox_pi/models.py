@@ -70,6 +70,35 @@ class RecognitionSource(StrEnum):
     GEMINI = "gemini"
 
 
+class PairingStatus(StrEnum):
+    PENDING = "pending"
+    EXPIRED = "expired"
+    PAIRED = "paired"
+
+
+@dataclass(frozen=True, slots=True)
+class PairingSession:
+    session_id: str
+    pairing_code: str
+    device_token: str
+    expires_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class PairingStatusResponse:
+    status: PairingStatus
+    device_id: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceIdentity:
+    id: int
+    name: str
+    device_type: str
+    paired_at: str
+    last_seen_at: str | None
+
+
 @dataclass(frozen=True, slots=True)
 class RecognizedFood:
     name: str

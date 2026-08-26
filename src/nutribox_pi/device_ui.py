@@ -17,6 +17,7 @@ from nutribox_pi.models import (
     RecognitionSource,
     RecognizedFood,
 )
+from nutribox_pi.pairing import PairingState, PairingWorkflow
 from nutribox_pi.ports import PreviewCamera, PreviewSession
 from nutribox_pi.touchscreen import TouchRect
 
@@ -63,6 +64,11 @@ class UIScreen(StrEnum):
     NUTRITION_REFERENCE_NOT_FOUND = "nutrition_reference_not_found"
     RECOGNIZED_FOODS = "recognized_foods"
     ERROR = "error"
+    PAIR_REQUESTING = "pair_requesting"
+    PAIR_WAITING = "pair_waiting"
+    PAIR_PAIRED = "pair_paired"
+    PAIR_EXPIRED = "pair_expired"
+    PAIR_ERROR = "pair_error"
 
 
 class UIAction(StrEnum):
@@ -76,6 +82,8 @@ class UIAction(StrEnum):
     RETRY = "retry"
     HOME = "home"
     EXIT = "exit"
+    PAIR_DEVICE = "pair_device"
+    CANCEL_PAIRING = "cancel_pairing"
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +110,13 @@ def buttons_for(screen: UIScreen) -> tuple[ButtonLayout, ...]:
             ButtonLayout(
                 UIAction.ANALYZE,
                 "Analyze Meal",
-                TouchRect(180, 300, 440, 88),
+                TouchRect(180, 250, 440, 76),
+            ),
+            ButtonLayout(
+                UIAction.PAIR_DEVICE,
+                "Pair Device",
+                TouchRect(180, 342, 440, 76),
+                "card",
             ),
             EXIT_BUTTON,
         )
@@ -176,6 +190,19 @@ def buttons_for(screen: UIScreen) -> tuple[ButtonLayout, ...]:
                 TouchRect(430, 394, 300, 66),
             ),
             ButtonLayout(UIAction.HOME, "Home", TouchRect(430, 320, 300, 56), "card"),
+            EXIT_BUTTON,
+        )
+    if screen in {UIScreen.PAIR_REQUESTING, UIScreen.PAIR_WAITING}:
+        return (
+            ButtonLayout(
+                UIAction.CANCEL_PAIRING, "Cancel", TouchRect(250, 370, 300, 64), "card"
+            ),
+            EXIT_BUTTON,
+        )
+    if screen in {UIScreen.PAIR_PAIRED, UIScreen.PAIR_EXPIRED, UIScreen.PAIR_ERROR}:
+        return (
+            ButtonLayout(UIAction.RETRY, "Retry", TouchRect(90, 370, 280, 64)),
+            ButtonLayout(UIAction.HOME, "Home", TouchRect(430, 370, 280, 64), "card"),
             EXIT_BUTTON,
         )
     return (
@@ -264,18 +291,51 @@ class MealCaptureWorkflow:
         controller: NutriBoxController,
         store: TemporaryCaptureStore | None = None,
         simulated_weight: bool = False,
+        pairing: PairingWorkflow | None = None,
     ) -> None:
         self._camera = camera
         self._preview: PreviewSession | None = None
         self._controller = controller
         self._store = store or TemporaryCaptureStore()
         self.simulated_weight = simulated_weight
+        self.pairing = pairing
         self.screen = UIScreen.HOME
         self.error_message: str | None = None
         self.result_message: str | None = None
         self.recognized_foods: tuple[RecognizedFood, ...] = ()
         self.recognition_source: RecognitionSource | None = None
         self.analysis_response: MealAnalysisResponse | None = None
+
+    def start_pairing(self) -> None:
+        if self.pairing is not None:
+            self.pairing.start()
+            self.screen = UIScreen.PAIR_REQUESTING
+
+    def tick_pairing(self) -> None:
+        if self.pairing is None:
+            return
+        self.pairing.tick()
+        screens = {
+            PairingState.UNPAIRED: UIScreen.HOME,
+            PairingState.REQUESTING: UIScreen.PAIR_REQUESTING,
+            PairingState.WAITING: UIScreen.PAIR_WAITING,
+            PairingState.PAIRED: UIScreen.PAIR_PAIRED,
+            PairingState.EXPIRED: UIScreen.PAIR_EXPIRED,
+            PairingState.ERROR: UIScreen.PAIR_ERROR,
+        }
+        if self.screen in {
+            UIScreen.PAIR_REQUESTING,
+            UIScreen.PAIR_WAITING,
+            UIScreen.PAIR_PAIRED,
+            UIScreen.PAIR_EXPIRED,
+            UIScreen.PAIR_ERROR,
+        }:
+            self.screen = screens[self.pairing.state]
+
+    def cancel_pairing(self) -> None:
+        if self.pairing is not None:
+            self.pairing.cancel()
+        self.screen = UIScreen.HOME
 
     @property
     def review_image(self) -> Path | None:
@@ -395,6 +455,8 @@ class MealCaptureWorkflow:
             self.analysis_response = None
 
     def close(self) -> UIResult:
+        if self.pairing is not None:
+            self.pairing.close()
         preview_closed = self._close_preview()
         if not preview_closed or not self._store.cleanup():
             self.screen = UIScreen.ERROR

@@ -9,9 +9,12 @@ from nutribox_pi.models import (
     AnalysisResult,
     CameraAvailability,
     CaptureResult,
+    DeviceIdentity,
     FoodRecognitionResult,
     HealthResult,
     MealAnalysisResponse,
+    PairingSession,
+    PairingStatusResponse,
     PreviewFrame,
 )
 
@@ -36,12 +39,18 @@ class FoodRecognizer(Protocol):
     def recognize_food(self, image_path: Path) -> FoodRecognitionResult: ...
 
 
+class DevicePairing(Protocol):
+    def start(self, device_name: str) -> PairingSession: ...
+
+    def status(self, session_id: str, device_token: str) -> PairingStatusResponse: ...
+
+    def device_me(self, device_token: str) -> DeviceIdentity: ...
+
+
 class Camera(Protocol):
     def availability(self) -> CameraAvailability: ...
 
-    def capture(
-        self, output_path: Path, overwrite: bool = False
-    ) -> CaptureResult: ...
+    def capture(self, output_path: Path, overwrite: bool = False) -> CaptureResult: ...
 
 
 class PreviewSession(Protocol):

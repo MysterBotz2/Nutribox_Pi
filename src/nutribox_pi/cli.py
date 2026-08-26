@@ -11,6 +11,7 @@ from pathlib import Path
 from nutribox_pi import __version__
 from nutribox_pi.adapters import (
     BackendError,
+    DevicePairingClient,
     SimulatedTemperatureSensor,
     SimulatedWeightSensor,
     V1BackendClient,
@@ -28,14 +29,13 @@ from nutribox_pi.config import ConfigurationError, Settings
 from nutribox_pi.controller import NutriBoxController
 from nutribox_pi.device_ui import ANALYSIS_ERROR
 from nutribox_pi.diagnostics import DiagnosticsService, format_human_report
+from nutribox_pi.pairing import DeviceCredentialStore, PairingWorkflow
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nutribox-pi")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser(
-        "health", help="check the v1 backend health endpoint"
-    )
+    subparsers.add_parser("health", help="check the v1 backend health endpoint")
     diagnostics_parser = subparsers.add_parser(
         "diagnostics", help="run safe device diagnostics"
     )
@@ -62,10 +62,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             settings = Settings.from_env()
             controller = _controller(settings)
+            pairing = PairingWorkflow(
+                DevicePairingClient(
+                    settings.api_base_url, settings.http_timeout_seconds
+                ),
+                DeviceCredentialStore(),
+            )
+            pairing.startup_verify()
         except (BackendError, ConfigurationError, ValueError):
             print(ANALYSIS_ERROR)
             return 1
-        result = run_device_ui(controller=controller, simulated_weight=True)
+        result = run_device_ui(
+            controller=controller, simulated_weight=True, pairing=pairing
+        )
         print(result.message)
         return 0 if result.ok else 1
 
@@ -84,9 +93,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if report.ok else 1
 
     if args.command == "camera-capture":
-        result = camera_from_env().capture(
-            Path(args.output), overwrite=args.overwrite
-        )
+        result = camera_from_env().capture(Path(args.output), overwrite=args.overwrite)
         print(
             json.dumps(capture_as_dict(result), sort_keys=True)
             if args.json
@@ -121,9 +128,7 @@ def _controller(settings: Settings) -> NutriBoxController:
             settings.api_base_url, timeout_seconds=settings.http_timeout_seconds
         ),
         weight_sensor=SimulatedWeightSensor(settings.simulated_weight_grams),
-        temperature_sensor=SimulatedTemperatureSensor(
-            settings.simulated_temperature_c
-        ),
+        temperature_sensor=SimulatedTemperatureSensor(settings.simulated_temperature_c),
     )
 
 

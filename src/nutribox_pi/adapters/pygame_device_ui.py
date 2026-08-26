@@ -36,6 +36,7 @@ from nutribox_pi.device_ui import (
     scaled_image_size,
 )
 from nutribox_pi.models import AnalysisStatus, CalculatedResponse
+from nutribox_pi.pairing import PairingWorkflow, format_countdown
 from nutribox_pi.ports import PreviewCamera
 
 PRESSED_PRIMARY = (48, 143, 72)
@@ -64,6 +65,7 @@ def run_device_ui(
     simulated_weight: bool = False,
     pygame_module: Any | None = None,
     store: TemporaryCaptureStore | None = None,
+    pairing: PairingWorkflow | None = None,
 ) -> UIResult:
     pygame = pygame_module
     if pygame is None:
@@ -95,7 +97,7 @@ def run_device_ui(
             outcome = UIResult(False, ANALYSIS_ERROR)
             return outcome
         workflow = MealCaptureWorkflow(
-            camera or camera_from_env(), controller, store, simulated_weight
+            camera or camera_from_env(), controller, store, simulated_weight, pairing
         )
         outcome = _run_loop(pygame, screen, fonts, workflow)
     except Exception:
@@ -187,6 +189,7 @@ def _run_loop(
     preview_cache = _PreviewSurfaceCache()
     image_cache = _UiImageCache()
     while True:
+        workflow.tick_pairing()
         if workflow.screen is UIScreen.CAPTURE:
             now = time.monotonic()
             if now >= next_preview_at:
@@ -280,6 +283,10 @@ def _apply_action(
         return UIResult(True, UI_CLOSED)
     if action is UIAction.ANALYZE:
         workflow.analyze()
+    elif action is UIAction.PAIR_DEVICE:
+        workflow.start_pairing()
+    elif action is UIAction.CANCEL_PAIRING:
+        workflow.cancel_pairing()
     elif action is UIAction.BACK:
         workflow.back()
     elif action is UIAction.CAPTURE:
@@ -307,11 +314,23 @@ def _apply_action(
             image_cache.clear()
         workflow.retake()
     elif action is UIAction.RETRY:
-        workflow.retry()
+        if workflow.screen in {UIScreen.PAIR_EXPIRED, UIScreen.PAIR_ERROR}:
+            workflow.start_pairing()
+        else:
+            workflow.retry()
     elif action is UIAction.HOME:
         if image_cache is not None:
             image_cache.clear()
-        workflow.home()
+        if workflow.screen in {
+            UIScreen.PAIR_REQUESTING,
+            UIScreen.PAIR_WAITING,
+            UIScreen.PAIR_PAIRED,
+            UIScreen.PAIR_EXPIRED,
+            UIScreen.PAIR_ERROR,
+        }:
+            workflow.cancel_pairing()
+        else:
+            workflow.home()
     return None
 
 
@@ -367,6 +386,14 @@ def _render(
         _render_result(pygame, screen, fonts, workflow, cache.thumbnail)
     elif workflow.screen is UIScreen.RECOGNIZED_FOODS:
         _render_recognized_foods(pygame, screen, fonts, workflow, cache.thumbnail)
+    elif workflow.screen in {
+        UIScreen.PAIR_REQUESTING,
+        UIScreen.PAIR_WAITING,
+        UIScreen.PAIR_PAIRED,
+        UIScreen.PAIR_EXPIRED,
+        UIScreen.PAIR_ERROR,
+    }:
+        _render_pairing(pygame, screen, fonts, workflow)
     else:
         _render_error(pygame, screen, fonts, workflow.error_message)
     for button in buttons_for(workflow.screen):
@@ -384,6 +411,39 @@ def _render_home(pygame: Any, screen: Any, fonts: _Fonts) -> None:
         (400, 213),
         SECONDARY_TEXT,
     )
+
+
+def _render_pairing(
+    pygame: Any, screen: Any, fonts: _Fonts, workflow: MealCaptureWorkflow
+) -> None:
+    pairing = workflow.pairing
+    _draw_text(screen, fonts.subheading, "Pair Device", (400, 100), NUTRIBOX_BLUE)
+    _draw_card(pygame, screen, (100, 140, 600, 180))
+    if pairing is None:
+        message = "Device pairing is unavailable."
+    elif workflow.screen is UIScreen.PAIR_WAITING:
+        message = pairing.code or "Waiting for pairing code..."
+    elif workflow.screen is UIScreen.PAIR_PAIRED:
+        message = (
+            f"Device paired: {pairing.device.name}"
+            if pairing.device
+            else "Device paired."
+        )
+    elif workflow.screen is UIScreen.PAIR_EXPIRED:
+        message = "Pairing code expired."
+    elif workflow.screen is UIScreen.PAIR_ERROR:
+        message = pairing.error_message or "Device pairing is unavailable."
+    else:
+        message = "Requesting pairing code..."
+    _draw_text(screen, fonts.body, message, (400, 220), PRIMARY_TEXT)
+    if pairing is not None and workflow.screen is UIScreen.PAIR_WAITING:
+        _draw_text(
+            screen,
+            fonts.small,
+            format_countdown(pairing.remaining_seconds()),
+            (400, 270),
+            SECONDARY_TEXT,
+        )
 
 
 def _render_capture(

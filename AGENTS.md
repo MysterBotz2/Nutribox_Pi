@@ -11,3 +11,5 @@
 - Run `pytest`, `ruff check .`, and `git diff --check` before handoff when the
   relevant tools and Git metadata are available.
 
+PI-2B permits limited device pairing only. Never store a user JWT or use a
+device token for meal analysis or other user-owned actions.
