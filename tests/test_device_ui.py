@@ -166,6 +166,81 @@ def test_capture_entry_starts_preview_and_back_closes_it(tmp_path: Path) -> None
     assert camera.sessions[0].closed is True
 
 
+def test_start_processing_analyze_and_preview_back_contract(tmp_path: Path) -> None:
+    class Credential:
+        token = "valid-device-token"
+
+        def get_verified_device_token(self) -> str:
+            return self.token
+
+    credential = Credential()
+    camera = RecordingPreviewCamera()
+    store = _store(tmp_path)
+    controller = NutriBoxController(
+        RecordingBackend(),
+        SimulatedWeightSensor(250),
+        SimulatedTemperatureSensor(),
+        credential,
+    )
+    workflow = MealCaptureWorkflow(camera, controller, store)
+    stale_image = store.prepare()
+    stale_image.write_bytes(b"owned temporary jpeg")
+    workflow.captured_weight_grams = 999
+
+    workflow.analyze()
+    assert workflow.screen is UIScreen.CAPTURE
+    assert workflow.screen is not UIScreen.INSTRUCTION
+    workflow.back()
+
+    assert workflow.screen is UIScreen.HOME
+    assert camera.sessions[0].closed is True
+    assert not stale_image.exists()
+    assert workflow.captured_weight_grams is None
+    assert credential.token == "valid-device-token"
+
+
+def test_review_back_and_retake_navigation_cleanup_contract(tmp_path: Path) -> None:
+    class Credential:
+        token = "valid-device-token"
+
+        def get_verified_device_token(self) -> str:
+            return self.token
+
+    credential = Credential()
+    camera = RecordingPreviewCamera()
+    controller = NutriBoxController(
+        RecordingBackend(),
+        SimulatedWeightSensor(250),
+        SimulatedTemperatureSensor(),
+        credential,
+    )
+    workflow = MealCaptureWorkflow(camera, controller, _store(tmp_path))
+
+    workflow.analyze()
+    workflow.begin_capture()
+    workflow.perform_capture()
+    first_image = workflow.review_image
+    assert first_image is not None and first_image.exists()
+    assert camera.sessions[0].closed is True
+
+    workflow.retake()
+    assert workflow.screen is UIScreen.CAPTURE
+    assert not first_image.exists()
+    assert workflow.captured_weight_grams is None
+
+    workflow.begin_capture()
+    workflow.perform_capture()
+    second_image = workflow.review_image
+    assert second_image is not None and second_image.exists()
+    assert camera.sessions[1].closed is True
+    workflow.back()
+
+    assert workflow.screen is UIScreen.HOME
+    assert not second_image.exists()
+    assert workflow.captured_weight_grams is None
+    assert credential.token == "valid-device-token"
+
+
 def test_capture_closes_preview_before_review_and_retake_opens_new_preview(
     tmp_path: Path,
 ) -> None:
@@ -669,7 +744,7 @@ def test_stale_analysis_pointer_events_cannot_activate_result_home(
     workflow.perform_capture()
     assert workflow.screen is UIScreen.REVIEW
 
-    analysis_point = (520, 350)
+    analysis_point = (610, 270)
     events = iter(
         [
             [
@@ -784,7 +859,7 @@ def test_stale_capture_pointer_events_cannot_repeat_capture(
     camera = CountingCamera()
     workflow = MealCaptureWorkflow(camera, _controller(), _store(tmp_path))
     workflow.analyze()
-    capture_point = (250, 400)
+    capture_point = (650, 315)
     events = iter(
         [
             [
@@ -873,7 +948,7 @@ def test_pointer_events_preserve_mouse_and_native_finger_input() -> None:
 
 def test_review_and_result_actions_match_pi2a_workflow() -> None:
     review_labels = {button.label for button in buttons_for(UIScreen.REVIEW)}
-    assert "Start meal analysis" in review_labels
+    assert review_labels == {"Yes", "No", "Back"}
     assert "Done" not in review_labels
 
     for screen in STATUS_SCREENS.values():

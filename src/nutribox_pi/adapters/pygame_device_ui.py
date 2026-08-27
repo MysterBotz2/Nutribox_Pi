@@ -20,6 +20,7 @@ from nutribox_pi.device_ui import (
     DISPLAY_ERROR,
     DISPLAY_SIZE,
     ELEVATED_SURFACE,
+    PREVIEW_ERROR,
     PRIMARY,
     PRIMARY_MUTED,
     PRIMARY_TEXT,
@@ -413,11 +414,11 @@ def _render(
     elif workflow.screen is UIScreen.HOME:
         _render_home(pygame, screen, fonts, workflow)
     elif workflow.screen in {UIScreen.CAPTURE, UIScreen.CAPTURING}:
-        _render_capture(pygame, screen, fonts, workflow.screen, preview)
+        _render_capture(pygame, screen, fonts, workflow, preview)
     elif workflow.screen is UIScreen.REVIEW:
         _render_review(pygame, screen, fonts, workflow, cache)
     elif workflow.screen is UIScreen.ANALYZING:
-        _render_analyzing(pygame, screen, fonts, workflow.simulated_weight)
+        _render_analyzing(pygame, screen, fonts, workflow)
     elif workflow.screen in RESULT_SCREENS:
         _render_result(pygame, screen, fonts, workflow, cache.thumbnail)
     elif workflow.screen is UIScreen.RECOGNIZED_FOODS:
@@ -431,7 +432,7 @@ def _render(
     }:
         _render_pairing(pygame, screen, fonts, workflow)
     else:
-        _render_error(pygame, screen, fonts, workflow.error_message)
+        _render_error(pygame, screen, fonts, workflow.error_message, workflow.language)
     for button in buttons_for(workflow.screen, _pairing_state(workflow)):
         button = _localized_button(button, workflow)
         _draw_button(pygame, screen, fonts.button, button, pressed is button.action)
@@ -468,6 +469,15 @@ def _localized_button(
         )
     if button.action is UIAction.PAIR_DEVICE and not button.enabled:
         key = "paired" if button.label == "Device paired" else "checking"
+    if button.action is UIAction.CAPTURE:
+        key = "capture_meal"
+    if workflow.screen is UIScreen.REVIEW:
+        if button.action is UIAction.ANALYZE_MEAL:
+            key = "yes"
+        elif button.action is UIAction.RETAKE:
+            key = "no"
+    if button.action is UIAction.RETRY:
+        key = "retry"
     if key is None:
         return button
     return ButtonLayout(
@@ -620,28 +630,43 @@ def _render_capture(
     pygame: Any,
     screen: Any,
     fonts: _Fonts,
-    state: UIScreen,
+    workflow: MealCaptureWorkflow,
     preview: Any | None,
 ) -> None:
-    _draw_text(screen, fonts.subheading, "Capture your meal", (400, 68), PRIMARY_TEXT)
-    _draw_card(pygame, screen, (180, 88, 440, 256))
-    message = (
-        "Capturing your meal..."
-        if state is UIScreen.CAPTURING
-        else "Place the full meal inside the camera view, then tap Capture."
+    language = workflow.language
+    state = workflow.screen
+    _draw_text(
+        screen,
+        fonts.subheading,
+        text(language, "camera_preview"),
+        (280, 34),
+        PRIMARY_TEXT,
     )
-    _draw_text(screen, fonts.body, message, (400, 360), SECONDARY_TEXT)
+    _draw_card(pygame, screen, (20, 56, 520, 372))
+    _draw_card(pygame, screen, (558, 86, 222, 174))
+    message = (
+        text(language, "capture_meal") + "..."
+        if state is UIScreen.CAPTURING
+        else (
+            text(language, "simulated_preview")
+            if workflow.simulated_camera
+            else text(language, "live_preview")
+        )
+    )
+    _draw_text(screen, fonts.small, message, (280, 402), SECONDARY_TEXT)
+    _draw_text(screen, fonts.body, text(language, "weight"), (669, 126), PRIMARY_TEXT)
+    _draw_text(screen, fonts.small, "Measured at capture", (669, 174), SECONDARY_TEXT)
     if preview is not None:
         target_size = tuple(preview.get_size())
-        left = (DISPLAY_SIZE[0] - target_size[0]) // 2
-        top = 98 + (PREVIEW_BOUNDS[1] - target_size[1]) // 2
+        left = 30 + (500 - target_size[0]) // 2
+        top = 66 + (320 - target_size[1]) // 2
         screen.blit(preview, (left, top))
     else:
         _draw_text(
             screen,
             fonts.body,
             "Starting camera preview...",
-            (400, 215),
+            (280, 220),
             SECONDARY_TEXT,
         )
 
@@ -657,37 +682,50 @@ def _render_review(
     if image_path is None:
         raise RuntimeError
     image = image_cache.capture_review_image(pygame, image_path)
-    _draw_card(pygame, screen, (24, 24, 456, 360))
+    language = workflow.language
+    _draw_card(pygame, screen, (20, 20, 520, 420))
     image_size = tuple(image.get_size())
-    left = 27 + (450 - image_size[0]) // 2
-    top = 54 + (300 - image_size[1]) // 2
+    left = 24 + (512 - image_size[0]) // 2
+    top = 45 + (350 - image_size[1]) // 2
     screen.blit(image, (left, top))
     _draw_corner_marks(pygame, screen, (left, top, image_size[0], image_size[1]))
-    _draw_wordmark(screen, fonts, (625, 88))
     _draw_text(
         screen,
         fonts.small,
-        "Know your meal, eat mindfully.",
-        (625, 128),
+        text(language, "captured_preview"),
+        (280, 416),
         SECONDARY_TEXT,
     )
+    _draw_text(screen, fonts.body, text(language, "weight"), (670, 70), PRIMARY_TEXT)
+    weight = workflow.captured_weight_grams
     _draw_text(
-        screen, fonts.small, "Ready for a closer look?", (625, 214), SECONDARY_TEXT
+        screen,
+        fonts.body,
+        f"{weight:g} g" if weight is not None else "--",
+        (670, 112),
+        PRIMARY_TEXT,
+    )
+    _draw_text(
+        screen,
+        fonts.body,
+        _ellipsize(fonts.body, text(language, "meal_clear"), 210),
+        (670, 190),
+        PRIMARY_TEXT,
     )
 
 
 def _render_analyzing(
-    pygame: Any, screen: Any, fonts: _Fonts, simulated_weight: bool
+    pygame: Any, screen: Any, fonts: _Fonts, workflow: MealCaptureWorkflow
 ) -> None:
     _draw_magnifier_illustration(pygame, screen, (400, 160))
     _draw_text(
         screen,
         fonts.subheading,
-        "Analyzing nutritional data…",
+        text(workflow.language, "analyzing_meal"),
         (400, 300),
         NUTRIBOX_BLUE,
     )
-    if simulated_weight:
+    if workflow.simulated_weight:
         _draw_text(
             screen,
             fonts.small,
@@ -958,13 +996,28 @@ def _draw_magnifier_illustration(
     pygame.draw.circle(screen, CARBOHYDRATES, (x - 15, y + 22), 14)
 
 
-def _render_error(pygame: Any, screen: Any, fonts: _Fonts, message: str | None) -> None:
-    _draw_text(screen, fonts.heading, "Something went wrong", (400, 125), DANGER)
+def _render_error(
+    pygame: Any,
+    screen: Any,
+    fonts: _Fonts,
+    message: str | None,
+    language: Language = Language.ENGLISH,
+) -> None:
+    safe_message = {
+        PREVIEW_ERROR: text(language, "camera_error"),
+        ANALYSIS_ERROR: text(language, "network_error"),
+    }.get(message, message or "Unable to continue safely.")
+    heading = (
+        "Nagkaroon ng problema"
+        if language is Language.TAGALOG
+        else "Something went wrong"
+    )
+    _draw_text(screen, fonts.heading, heading, (400, 125), DANGER)
     _draw_card(pygame, screen, (100, 175, 600, 110))
     _draw_text(
         screen,
         fonts.body,
-        message or "Unable to continue safely.",
+        _ellipsize(fonts.body, safe_message, 560),
         (400, 230),
         SECONDARY_TEXT,
     )

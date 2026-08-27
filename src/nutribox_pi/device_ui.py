@@ -17,8 +17,13 @@ from nutribox_pi.models import (
     RecognitionSource,
     RecognizedFood,
 )
-from nutribox_pi.pairing import PairingState, PairingWorkflow
-from nutribox_pi.ports import PreviewCamera, PreviewSession
+from nutribox_pi.pairing import REVOKED_MESSAGE, PairingState, PairingWorkflow
+from nutribox_pi.ports import (
+    DeviceAuthenticationFailure,
+    PreviewCamera,
+    PreviewSession,
+    RetryableBackendFailure,
+)
 from nutribox_pi.touchscreen import TouchRect
 from nutribox_pi.ui_preferences import Language
 from nutribox_pi.ui_shell import MILESTONES, StartupShell
@@ -160,8 +165,10 @@ def buttons_for(
         )
     if screen is UIScreen.CAPTURE:
         return (
-            ButtonLayout(UIAction.BACK, "Back", TouchRect(30, 20, 110, 58), "card"),
-            ButtonLayout(UIAction.CAPTURE, "Capture", TouchRect(240, 380, 320, 60)),
+            ButtonLayout(UIAction.BACK, "Back", TouchRect(570, 370, 200, 58), "card"),
+            ButtonLayout(
+                UIAction.CAPTURE, "Capture Meal", TouchRect(570, 286, 200, 64)
+            ),
             EXIT_BUTTON,
         )
     if screen is UIScreen.CAPTURING:
@@ -169,22 +176,16 @@ def buttons_for(
             ButtonLayout(
                 UIAction.CAPTURE,
                 "Capturing...",
-                TouchRect(240, 380, 320, 60),
+                TouchRect(570, 286, 200, 64),
                 enabled=False,
             ),
             EXIT_BUTTON,
         )
     if screen is UIScreen.REVIEW:
         return (
-            ButtonLayout(
-                UIAction.RETAKE, "Retake", TouchRect(500, 404, 130, 56), "card"
-            ),
-            ButtonLayout(
-                UIAction.ANALYZE_MEAL,
-                "Start meal analysis",
-                TouchRect(510, 320, 260, 64),
-            ),
-            ButtonLayout(UIAction.EXIT, "Exit", TouchRect(640, 404, 130, 56), "danger"),
+            ButtonLayout(UIAction.ANALYZE_MEAL, "Yes", TouchRect(570, 244, 92, 60)),
+            ButtonLayout(UIAction.RETAKE, "No", TouchRect(678, 244, 92, 60), "card"),
+            ButtonLayout(UIAction.BACK, "Back", TouchRect(570, 370, 200, 58), "card"),
         )
     if screen is UIScreen.ANALYZING:
         return (
@@ -367,14 +368,18 @@ class MealCaptureWorkflow:
         self._controller = controller
         self._store = store or TemporaryCaptureStore()
         self.simulated_weight = simulated_weight
+        self.simulated_camera = bool(getattr(camera, "is_simulated", False))
         self.pairing = pairing
         self.startup_shell = startup_shell
         self.screen = UIScreen.LOADING if startup_shell is not None else UIScreen.HOME
+        self._startup_language_selection = startup_shell is not None
         self.error_message: str | None = None
         self.result_message: str | None = None
         self.recognized_foods: tuple[RecognizedFood, ...] = ()
         self.recognition_source: RecognitionSource | None = None
         self.analysis_response: MealAnalysisResponse | None = None
+        self.captured_weight_grams: float | None = None
+        self.analysis_retry_available = False
 
     @property
     def language(self) -> Language:
@@ -397,9 +402,14 @@ class MealCaptureWorkflow:
         if self.startup_shell is None:
             return
         self.startup_shell.select_language(language)
+        show_intro = (
+            getattr(self, "_startup_language_selection", True)
+            and self.startup_shell.preferences.show_intro_on_startup
+        )
+        self._startup_language_selection = False
         self.screen = (
             UIScreen.INSTRUCTION
-            if self.startup_shell.preferences.show_intro_on_startup
+            if show_intro
             else UIScreen.HOME
         )
 
@@ -418,6 +428,16 @@ class MealCaptureWorkflow:
         if self.pairing is None:
             return
         self.pairing.tick()
+        if self.pairing.error_message == REVOKED_MESSAGE and self.screen in {
+            UIScreen.CAPTURE,
+            UIScreen.CAPTURING,
+            UIScreen.REVIEW,
+        }:
+            self._close_preview()
+            self._store.cleanup()
+            self._clear_analysis_state()
+            self.screen = UIScreen.HOME
+            return
         screens = {
             PairingState.UNPAIRED: UIScreen.HOME,
             PairingState.REQUESTING: UIScreen.PAIR_REQUESTING,
@@ -450,6 +470,8 @@ class MealCaptureWorkflow:
         self.recognized_foods = ()
         self.recognition_source = None
         self.analysis_response = None
+        self.captured_weight_grams = None
+        self.analysis_retry_available = False
         self._start_preview()
 
     def back(self) -> None:
@@ -460,7 +482,8 @@ class MealCaptureWorkflow:
             self.home()
             self.screen = UIScreen.LANGUAGE
             return
-        if self._close_preview():
+        if self._close_preview() and self._cleanup_or_error():
+            self._clear_analysis_state()
             self.error_message = None
             self.screen = UIScreen.HOME
 
@@ -470,6 +493,8 @@ class MealCaptureWorkflow:
         self.recognized_foods = ()
         self.recognition_source = None
         self.analysis_response = None
+        self.captured_weight_grams = None
+        self.analysis_retry_available = False
         self.screen = UIScreen.CAPTURING
 
     def perform_capture(self) -> None:
@@ -496,6 +521,12 @@ class MealCaptureWorkflow:
             and result.output_path == destination
             and destination.is_file()
         ):
+            try:
+                self.captured_weight_grams = self._controller.captured_weight_grams()
+            except Exception:
+                self._fail_after_cleanup(ANALYSIS_ERROR)
+                self.captured_weight_grams = None
+                return
             self.screen = UIScreen.REVIEW
             return
         self._fail_after_cleanup(CAMERA_ERROR)
@@ -510,24 +541,46 @@ class MealCaptureWorkflow:
         if self.screen is not UIScreen.ANALYZING:
             return
         image_path = self._store.image_path
-        if image_path is None:
+        captured_weight = self.captured_weight_grams
+        if image_path is None or captured_weight is None:
             self._fail_after_cleanup(ANALYSIS_ERROR)
             return
         result = None
-        failed = False
         try:
-            result = self._controller.analyze_meal(image_path)
+            result = self._controller.analyze_meal(image_path, captured_weight)
+        except RetryableBackendFailure:
+            self.screen = UIScreen.ERROR
+            self.error_message = ANALYSIS_ERROR
+            self.analysis_retry_available = True
+            return
+        except DeviceAuthenticationFailure:
+            self._store.cleanup()
+            self._clear_analysis_state()
+            self.screen = UIScreen.HOME
+            return
         except Exception:
-            failed = True
-        finally:
             cleaned = self._store.cleanup()
+            self._clear_analysis_state()
+            if not cleaned:
+                self.screen = UIScreen.ERROR
+                self.error_message = CLEANUP_ERROR
+                return
+            self.screen = UIScreen.ERROR
+            self.error_message = ANALYSIS_ERROR
+            return
+        except BaseException:
+            self._store.cleanup()
+            self._clear_analysis_state()
+            raise
+        cleaned = self._store.cleanup()
         if not cleaned:
             self.screen = UIScreen.ERROR
             self.error_message = CLEANUP_ERROR
             return
-        if failed or result is None:
+        if result is None:
             self.screen = UIScreen.ERROR
             self.error_message = ANALYSIS_ERROR
+            self._clear_analysis_state()
             return
         self.screen = STATUS_SCREENS[result.status]
         self.result_message = RESULT_MESSAGES[result.status]
@@ -535,13 +588,13 @@ class MealCaptureWorkflow:
             self.analysis_response = result
             self.recognized_foods = result.recognized_foods
             self.recognition_source = result.recognition_source
+        self.captured_weight_grams = None
+        self.analysis_retry_available = False
 
     def retake(self) -> None:
         if self._cleanup_or_error():
+            self._clear_analysis_state()
             self.error_message = None
-            self.recognized_foods = ()
-            self.recognition_source = None
-            self.analysis_response = None
             self._start_preview()
 
     def show_recognized_foods(self) -> None:
@@ -549,20 +602,21 @@ class MealCaptureWorkflow:
             self.screen = UIScreen.RECOGNIZED_FOODS
 
     def retry(self) -> None:
-        if self._cleanup_or_error():
+        if self.analysis_retry_available and self._store.image_path is not None:
+            self.analysis_retry_available = False
             self.error_message = None
-            self.recognized_foods = ()
-            self.recognition_source = None
-            self.analysis_response = None
+            self.screen = UIScreen.REVIEW
+            return
+        if self._cleanup_or_error():
+            self._clear_analysis_state()
+            self.error_message = None
             self._start_preview()
 
     def home(self) -> None:
         if self._close_preview() and self._cleanup_or_error():
             self.screen = UIScreen.HOME
+            self._clear_analysis_state()
             self.error_message = None
-            self.recognized_foods = ()
-            self.recognition_source = None
-            self.analysis_response = None
 
     def close(self) -> UIResult:
         if self.pairing is not None:
@@ -572,6 +626,7 @@ class MealCaptureWorkflow:
             self.screen = UIScreen.ERROR
             self.error_message = CLEANUP_ERROR
             return UIResult(False, CLEANUP_ERROR)
+        self._clear_analysis_state()
         return UIResult(True, UI_CLOSED)
 
     def preview_frame(self) -> PreviewFrame | None:
@@ -611,6 +666,15 @@ class MealCaptureWorkflow:
             message = CLEANUP_ERROR
         self.screen = UIScreen.ERROR
         self.error_message = message
+        self.captured_weight_grams = None
+        self.analysis_retry_available = False
+
+    def _clear_analysis_state(self) -> None:
+        self.recognized_foods = ()
+        self.recognition_source = None
+        self.analysis_response = None
+        self.captured_weight_grams = None
+        self.analysis_retry_available = False
 
     def _cleanup_or_error(self) -> bool:
         if self._store.cleanup():

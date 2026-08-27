@@ -23,6 +23,33 @@ directory on Windows). The allowlist contains only schema version, language,
 and the show-intro boolean. It contains no device credential, owner identity,
 backend URL, image, or meal data and is separate from `device-token.json`.
 
+## PI-3B2 capture confirmation
+
+Desktop simulation and Raspberry Pi Camera Module 3 use the same explicit
+sequence: Start Processing → live preview → Capture Meal → frozen Captured Meal
+Preview → Yes → Analyzing → the existing backend-defined result. Windows uses
+the existing simulated-camera adapter; it is labeled as simulated and is never
+presented as live hardware footage. Raspberry Pi construction remains lazy and
+continues through the existing Picamera2 adapter and preview-session port.
+
+The validated read-only weight is sampled once after the JPEG is successfully
+captured. That exact snapshot is displayed beside the frozen image and sent as
+`weight_grams`; confirmation never rereads the sensor. There is no manual weight
+entry and no HX711 support in this checkpoint.
+
+No/Retake securely removes the rejected JPEG, clears its weight, and opens one
+new preview session. Back stops preview, removes the owned temporary JPEG,
+clears capture/analysis state, and returns to Start Processing. Home, Exit,
+capture failure, malformed responses, successful analysis, and confirmed
+device revocation apply the same ownership-aware cleanup. Retryable network
+failures retain the frozen capture only until another explicit Retry/Confirm or
+cleanup action; they never submit automatically.
+
+Anonymous analysis sends no device header. Verified paired analysis sends only
+the existing `X-Device-Token`; the renderer never receives it and no
+`Authorization` header is used. Ingredient continuation UI and Save Meal
+changes remain outside PI-3B2.
+
 The touch-operated workflow uses the verified 800 x 480 Raspberry Pi display,
 the existing Camera and preview-session ports, and the light-theme tokens in
 `nutribox_design_system_spec.md`. The active UI sends the reviewed temporary

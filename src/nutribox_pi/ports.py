@@ -19,6 +19,14 @@ from nutribox_pi.models import (
 )
 
 
+class RetryableBackendFailure(RuntimeError):
+    """A request may be retried only after another explicit user action."""
+
+
+class DeviceAuthenticationFailure(RuntimeError):
+    """The backend confirmed that the stored device credential is invalid."""
+
+
 class WeightSensor(Protocol):
     def read_grams(self) -> float: ...
 

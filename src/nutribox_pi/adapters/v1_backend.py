@@ -20,6 +20,7 @@ from nutribox_pi.models import (
     RecognizedFood,
     RequiresFoodSelectionResponse,
 )
+from nutribox_pi.ports import DeviceAuthenticationFailure, RetryableBackendFailure
 from nutribox_pi.validation import (
     validate_api_base_url,
     validate_timeout,
@@ -29,6 +30,14 @@ from nutribox_pi.validation import (
 
 class BackendError(RuntimeError):
     """Raised when the v1 backend cannot provide a valid response."""
+
+
+class RetryableBackendError(BackendError, RetryableBackendFailure):
+    pass
+
+
+class DeviceAuthenticationError(BackendError, DeviceAuthenticationFailure):
+    pass
 
 
 class V1BackendClient:
@@ -140,6 +149,15 @@ class V1BackendClient:
                 timeout=self._timeout,
                 **kwargs,
             )
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            raise RetryableBackendError("backend request failed") from exc
+        except requests.RequestException as exc:
+            raise BackendError("backend request failed") from exc
+        if response.status_code == 401:
+            raise DeviceAuthenticationError("device authentication failed")
+        if response.status_code in {503, 504}:
+            raise RetryableBackendError("backend request failed")
+        try:
             response.raise_for_status()
         except requests.RequestException as exc:
             raise BackendError("backend request failed") from exc

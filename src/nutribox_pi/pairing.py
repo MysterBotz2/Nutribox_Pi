@@ -297,6 +297,19 @@ class PairingWorkflow:
             return None
         return self._verified_token
 
+    def confirm_revocation(self) -> None:
+        """Apply a backend-confirmed device-authentication revocation."""
+        try:
+            self.store.remove()
+        except CredentialError:
+            self._error(PAIRING_ERROR)
+            return
+        self._reset_pending()
+        self.device = None
+        self.greeting = None
+        self.state = PairingState.UNPAIRED
+        self.error_message = REVOKED_MESSAGE
+
     def _reset_pending(self) -> None:
         self._clear_transient()
         self._verified_token = None

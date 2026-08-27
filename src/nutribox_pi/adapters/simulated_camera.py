@@ -25,6 +25,8 @@ def synthetic_jpeg() -> bytes:
 
 
 class SimulatedCamera(SafeCameraAdapter):
+    is_simulated = True
+
     def availability(self) -> CameraAvailability:
         return CameraAvailability(
             True,

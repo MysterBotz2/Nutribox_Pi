@@ -141,6 +141,26 @@ def test_language_selection_respects_intro_setting(
         assert workflow.screen is UIScreen.HOME
 
 
+def test_language_change_after_startup_does_not_replay_instructions(
+    tmp_path: Path,
+) -> None:
+    workflow = MealCaptureWorkflow.__new__(MealCaptureWorkflow)
+    workflow.startup_shell = StartupShell(
+        UIPreferenceStore(tmp_path),
+        UIPreferences(show_intro_on_startup=True),
+    )
+    workflow.screen = UIScreen.LANGUAGE
+
+    workflow.select_language(Language.ENGLISH)
+    assert workflow.screen is UIScreen.INSTRUCTION
+    workflow.continue_from_instruction()
+    assert workflow.screen is UIScreen.HOME
+
+    workflow.screen = UIScreen.LANGUAGE
+    workflow.select_language(Language.TAGALOG)
+    assert workflow.screen is UIScreen.HOME
+
+
 def test_sdl_dummy_renders_new_screens_inside_canvas(tmp_path: Path) -> None:
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     pygame = pytest.importorskip("pygame")
