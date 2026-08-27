@@ -1,5 +1,28 @@
 # PI-1D / PI-2A Meal-Capture and Analysis UI
 
+## PI-3B1 desktop simulation and startup shell
+
+The client now uses an exact 800 x 480 logical canvas. Native Windows runs in
+an 800 x 480 window; Raspberry Pi/Linux retains fullscreen mode. For Windows,
+use the repository's `.venv-windows` environment and install Pygame there:
+
+```powershell
+.\.venv-windows\Scripts\python.exe -m pip install pygame
+.\.venv-windows\Scripts\python.exe -m nutribox_pi ui
+```
+
+Mouse input follows the same action and stale-event fencing as touchscreen
+input. The startup flow displays real local loading milestones, always asks for
+English or Tagalog, optionally shows the instructional shell, and then opens
+Start Processing. PI-3B1 provides only a navigable media-unavailable shell; it
+does not decode or play video.
+
+UI preferences are stored atomically in
+`~/.config/nutribox-pi/ui-preferences.json` (the corresponding user profile
+directory on Windows). The allowlist contains only schema version, language,
+and the show-intro boolean. It contains no device credential, owner identity,
+backend URL, image, or meal data and is separate from `device-token.json`.
+
 The touch-operated workflow uses the verified 800 x 480 Raspberry Pi display,
 the existing Camera and preview-session ports, and the light-theme tokens in
 `nutribox_design_system_spec.md`. The active UI sends the reviewed temporary

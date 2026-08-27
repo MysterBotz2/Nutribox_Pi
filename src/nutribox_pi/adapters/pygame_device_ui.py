@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import sys
 import time
 from contextlib import suppress
 from dataclasses import dataclass
@@ -38,6 +39,8 @@ from nutribox_pi.device_ui import (
 from nutribox_pi.models import AnalysisStatus, CalculatedResponse
 from nutribox_pi.pairing import PairingState, PairingWorkflow, format_countdown
 from nutribox_pi.ports import PreviewCamera
+from nutribox_pi.ui_preferences import Language, UIPreferenceStore
+from nutribox_pi.ui_shell import StartupShell, text
 
 PRESSED_PRIMARY = (48, 143, 72)
 PRESSED_CARD = (222, 222, 227)
@@ -58,6 +61,11 @@ PREVIEW_INTERVAL_SECONDS = 1 / 15
 THUMBNAIL_BOUNDS = (150, 84)
 
 
+def display_flags_for(platform: str, fullscreen_flag: int) -> int:
+    """Single deterministic native-display decision boundary."""
+    return 0 if platform.startswith("win") else fullscreen_flag
+
+
 def run_device_ui(
     camera: PreviewCamera | None = None,
     controller: NutriBoxController | None = None,
@@ -66,6 +74,8 @@ def run_device_ui(
     pygame_module: Any | None = None,
     store: TemporaryCaptureStore | None = None,
     pairing: PairingWorkflow | None = None,
+    preference_store: UIPreferenceStore | None = None,
+    platform: str | None = None,
 ) -> UIResult:
     pygame = pygame_module
     if pygame is None:
@@ -82,7 +92,9 @@ def run_device_ui(
         pygame.display.init()
         if not pygame.display.get_init():
             return outcome
-        screen = pygame.display.set_mode(DISPLAY_SIZE, pygame.FULLSCREEN)
+        display_flags = display_flags_for(platform or sys.platform, pygame.FULLSCREEN)
+        screen = pygame.display.set_mode(DISPLAY_SIZE, display_flags)
+
         if tuple(screen.get_size()) != DISPLAY_SIZE:
             return outcome
         pygame.display.set_caption("Nutri-Box")
@@ -97,7 +109,12 @@ def run_device_ui(
             outcome = UIResult(False, ANALYSIS_ERROR)
             return outcome
         workflow = MealCaptureWorkflow(
-            camera or camera_from_env(), controller, store, simulated_weight, pairing
+            camera or camera_from_env(),
+            controller,
+            store,
+            simulated_weight,
+            pairing,
+            StartupShell(preference_store or UIPreferenceStore()),
         )
         outcome = _run_loop(pygame, screen, fonts, workflow)
     except Exception:
@@ -189,6 +206,7 @@ def _run_loop(
     preview_cache = _PreviewSurfaceCache()
     image_cache = _UiImageCache()
     while True:
+        workflow.tick_startup()
         workflow.tick_pairing()
         if workflow.screen is UIScreen.CAPTURE:
             now = time.monotonic()
@@ -284,7 +302,17 @@ def _apply_action(
         if image_cache is not None:
             image_cache.clear()
         return UIResult(True, UI_CLOSED)
-    if action is UIAction.ANALYZE:
+    if action is UIAction.SELECT_ENGLISH:
+        workflow.select_language(Language.ENGLISH)
+    elif action is UIAction.SELECT_TAGALOG:
+        workflow.select_language(Language.TAGALOG)
+    elif action is UIAction.TOGGLE_INTRO:
+        workflow.toggle_intro()
+    elif action is UIAction.HELP:
+        workflow.screen = UIScreen.INSTRUCTION
+    elif action is UIAction.CONTINUE:
+        workflow.continue_from_instruction()
+    elif action is UIAction.ANALYZE:
         workflow.analyze()
     elif action is UIAction.PAIR_DEVICE:
         workflow.start_pairing()
@@ -376,7 +404,13 @@ def _render(
 ) -> None:
     _draw_grid(pygame, screen)
     cache = image_cache or _UiImageCache()
-    if workflow.screen is UIScreen.HOME:
+    if workflow.screen is UIScreen.LOADING:
+        _render_loading(pygame, screen, fonts, workflow)
+    elif workflow.screen is UIScreen.LANGUAGE:
+        _render_language(pygame, screen, fonts, workflow)
+    elif workflow.screen is UIScreen.INSTRUCTION:
+        _render_instruction(pygame, screen, fonts, workflow)
+    elif workflow.screen is UIScreen.HOME:
         _render_home(pygame, screen, fonts, workflow)
     elif workflow.screen in {UIScreen.CAPTURE, UIScreen.CAPTURING}:
         _render_capture(pygame, screen, fonts, workflow.screen, preview)
@@ -399,6 +433,7 @@ def _render(
     else:
         _render_error(pygame, screen, fonts, workflow.error_message)
     for button in buttons_for(workflow.screen, _pairing_state(workflow)):
+        button = _localized_button(button, workflow)
         _draw_button(pygame, screen, fonts.button, button, pressed is button.action)
     pygame.display.flip()
 
@@ -407,29 +442,147 @@ def _pairing_state(workflow: MealCaptureWorkflow) -> Any:
     return workflow.pairing.state if workflow.pairing is not None else None
 
 
-def _render_home(
+def _localized_button(
+    button: ButtonLayout, workflow: MealCaptureWorkflow
+) -> ButtonLayout:
+    language = workflow.language
+    keys = {
+        UIAction.ANALYZE: "analyze",
+        UIAction.BACK: "back",
+        UIAction.EXIT: "exit",
+        UIAction.PAIR_DEVICE: "pair",
+        UIAction.CONTINUE: "skip",
+        UIAction.SELECT_ENGLISH: "english",
+        UIAction.SELECT_TAGALOG: "tagalog",
+    }
+    key = keys.get(button.action)
+    if button.action is UIAction.TOGGLE_INTRO:
+        selected = (
+            workflow.startup_shell.preferences.show_intro_on_startup
+            if workflow.startup_shell is not None
+            else True
+        )
+        label = f"{'[x]' if selected else '[ ]'} {text(language, 'show_intro')}"
+        return ButtonLayout(
+            button.action, label, button.rectangle, button.role, button.enabled
+        )
+    if button.action is UIAction.PAIR_DEVICE and not button.enabled:
+        key = "paired" if button.label == "Device paired" else "checking"
+    if key is None:
+        return button
+    return ButtonLayout(
+        button.action,
+        text(language, key),
+        button.rectangle,
+        button.role,
+        button.enabled,
+    )
+
+
+def _render_loading(
     pygame: Any, screen: Any, fonts: _Fonts, workflow: MealCaptureWorkflow
 ) -> None:
-    _draw_card(pygame, screen, (90, 105, 620, 170))
-    _draw_text(screen, fonts.heading, "Nutri-Box", (400, 150), PRIMARY_TEXT)
+    shell = workflow.startup_shell
+    progress = shell.progress if shell is not None else 0.0
+    _draw_brand_mark(pygame, screen, (400, 132))
+    _draw_wordmark(screen, fonts, (400, 205))
+    pygame.draw.rect(screen, BORDER, (190, 258, 420, 16), border_radius=8)
+    pygame.draw.rect(
+        screen, PRIMARY, (190, 258, round(420 * progress), 16), border_radius=8
+    )
+    _draw_text(screen, fonts.body, "Loading...", (400, 306), PRIMARY_TEXT)
+    _draw_card(pygame, screen, (180, 350, 440, 76))
+    _draw_text(
+        screen,
+        fonts.small,
+        "Tip: Add variety for a balanced meal.",
+        (400, 388),
+        SECONDARY_TEXT,
+    )
+
+
+def _render_language(
+    pygame: Any, screen: Any, fonts: _Fonts, workflow: MealCaptureWorkflow
+) -> None:
+    language = workflow.language
+    _draw_text(
+        screen,
+        fonts.subheading,
+        text(language, "choose_language"),
+        (400, 112),
+        PRIMARY_TEXT,
+    )
+
+
+def _render_instruction(
+    pygame: Any, screen: Any, fonts: _Fonts, workflow: MealCaptureWorkflow
+) -> None:
+    language = workflow.language
+    _draw_card(pygame, screen, (24, 48, 520, 330))
+    _draw_brand_mark(pygame, screen, (284, 170))
     _draw_text(
         screen,
         fonts.body,
-        "Make every meal a healthier choice.",
-        (400, 213),
+        text(language, "media_unavailable"),
+        (284, 270),
         SECONDARY_TEXT,
     )
+    _draw_card(pygame, screen, (558, 48, 218, 330))
+    _draw_text(
+        screen, fonts.body, text(language, "instructions"), (667, 92), PRIMARY_TEXT
+    )
+    lines = (
+        (
+            "1. Place meal on plate.",
+            "2. Select Analyze Meal.",
+            "3. Keep meal in frame.",
+            "4. Review the results.",
+        )
+        if language is Language.ENGLISH
+        else (
+            "1. Ilagay ang pagkain.",
+            "2. Piliin ang Suriin.",
+            "3. Panatilihin sa frame.",
+            "4. Suriin ang resulta.",
+        )
+    )
+    for index, line in enumerate(lines):
+        _draw_text(screen, fonts.small, line, (667, 142 + index * 42), PRIMARY_TEXT)
+
+
+def _render_home(
+    pygame: Any, screen: Any, fonts: _Fonts, workflow: MealCaptureWorkflow
+) -> None:
+    _draw_brand_mark(pygame, screen, (400, 128))
+    language = getattr(workflow, "language", Language.ENGLISH)
+    heading_font = getattr(fonts, "subheading", fonts.heading)
+    fitting_font = heading_font if hasattr(heading_font, "size") else fonts.small
+    _draw_text(
+        screen,
+        heading_font,
+        _ellipsize(fitting_font, text(language, "ready"), 560),
+        (400, 205),
+        PRIMARY_TEXT,
+    )
     if workflow.pairing is not None and workflow.pairing.state is PairingState.PAIRED:
-        name = _ellipsize(fonts.small, workflow.pairing.device.owner_first_name, 300)
+        name = _ellipsize(fonts.small, workflow.pairing.device.owner_first_name, 240)
+        if workflow.pairing.greeting:
+            _draw_text(
+                screen,
+                fonts.small,
+                _ellipsize(fonts.small, workflow.pairing.greeting, 420),
+                (400, 404),
+                PRIMARY_TEXT,
+            )
         _draw_text(
-            screen, fonts.small, f"Paired with {name}", (400, 235), SECONDARY_TEXT
+            screen, fonts.small, f"Paired with {name}", (400, 430), SECONDARY_TEXT
         )
     elif workflow.pairing is not None and workflow.pairing.error_message:
         _draw_text(
             screen,
             fonts.small,
             workflow.pairing.error_message,
-            (400, 235),
+            (400, 410),
             SECONDARY_TEXT,
         )
 
@@ -752,10 +905,22 @@ def _draw_grid(pygame: Any, screen: Any) -> None:
     screen.fill(BACKGROUND)
     if not hasattr(pygame, "draw"):
         return
-    for x in range(0, DISPLAY_SIZE[0] + 1, 20):
-        pygame.draw.line(screen, GRID_BLUE, (x, 0), (x, DISPLAY_SIZE[1]))
-    for y in range(0, DISPLAY_SIZE[1] + 1, 20):
-        pygame.draw.line(screen, GRID_BLUE, (0, y), (DISPLAY_SIZE[0], y))
+    pygame.draw.circle(screen, (239, 248, 232), (30, 450), 110)
+    pygame.draw.circle(screen, (230, 243, 220), (780, 445), 92)
+
+
+def _draw_brand_mark(pygame: Any, screen: Any, center: tuple[int, int]) -> None:
+    """Clean shape fallback until a standalone client logo is supplied."""
+    if not hasattr(pygame, "draw"):
+        return
+    x, y = center
+    pygame.draw.rect(screen, PRIMARY, (x - 34, y - 25, 68, 52), border_radius=8)
+    pygame.draw.line(screen, WHITE, (x - 27, y - 15), (x, y), 4)
+    pygame.draw.line(screen, WHITE, (x + 27, y - 15), (x, y), 4)
+    pygame.draw.line(screen, WHITE, (x, y), (x, y + 22), 4)
+    pygame.draw.line(screen, PRIMARY, (x, y - 25), (x, y - 44), 5)
+    pygame.draw.ellipse(screen, PRIMARY, (x - 23, y - 49, 23, 13))
+    pygame.draw.ellipse(screen, PRIMARY, (x, y - 53, 25, 14))
 
 
 def _draw_wordmark(screen: Any, fonts: _Fonts, center: tuple[int, int]) -> None:
@@ -838,7 +1003,13 @@ def _draw_button(
         button.rectangle.x + button.rectangle.width // 2,
         button.rectangle.y + button.rectangle.height // 2,
     )
-    _draw_text(screen, font, button.label, center, text_color)
+    _draw_text(
+        screen,
+        font,
+        _ellipsize(font, button.label, max(1, button.rectangle.width - 20)),
+        center,
+        text_color,
+    )
 
 
 def _draw_text(

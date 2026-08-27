@@ -20,6 +20,8 @@ from nutribox_pi.models import (
 from nutribox_pi.pairing import PairingState, PairingWorkflow
 from nutribox_pi.ports import PreviewCamera, PreviewSession
 from nutribox_pi.touchscreen import TouchRect
+from nutribox_pi.ui_preferences import Language
+from nutribox_pi.ui_shell import MILESTONES, StartupShell
 
 DISPLAY_SIZE = (800, 480)
 CAPTURE_FILE_NAME = "meal.jpg"
@@ -59,6 +61,9 @@ RESULT_MESSAGES = {
 
 
 class UIScreen(StrEnum):
+    LOADING = "loading"
+    LANGUAGE = "language"
+    INSTRUCTION = "instruction"
     HOME = "home"
     CAPTURE = "capture"
     CAPTURING = "capturing"
@@ -78,6 +83,11 @@ class UIScreen(StrEnum):
 
 
 class UIAction(StrEnum):
+    SELECT_ENGLISH = "select_english"
+    SELECT_TAGALOG = "select_tagalog"
+    TOGGLE_INTRO = "toggle_intro"
+    HELP = "help"
+    CONTINUE = "continue"
     ANALYZE = "analyze"
     ANALYZE_MEAL = "analyze_meal"
     SHOW_RECOGNIZED_FOODS = "show_recognized_foods"
@@ -113,12 +123,37 @@ EXIT_BUTTON = ButtonLayout(UIAction.EXIT, "Exit", TouchRect(660, 20, 110, 58), "
 def buttons_for(
     screen: UIScreen, pairing_state: PairingState | None = None
 ) -> tuple[ButtonLayout, ...]:
+    if screen is UIScreen.LOADING:
+        return ()
+    if screen is UIScreen.LANGUAGE:
+        return (
+            ButtonLayout(
+                UIAction.SELECT_ENGLISH, "English", TouchRect(250, 164, 300, 58)
+            ),
+            ButtonLayout(
+                UIAction.SELECT_TAGALOG, "Tagalog", TouchRect(250, 234, 300, 58), "card"
+            ),
+            ButtonLayout(
+                UIAction.TOGGLE_INTRO,
+                "Show intro",
+                TouchRect(190, 350, 420, 52),
+                "card",
+            ),
+            ButtonLayout(UIAction.HELP, "?", TouchRect(700, 398, 56, 56), "card"),
+            EXIT_BUTTON,
+        )
+    if screen is UIScreen.INSTRUCTION:
+        return (
+            ButtonLayout(UIAction.BACK, "Back", TouchRect(570, 398, 96, 56), "card"),
+            ButtonLayout(UIAction.CONTINUE, "Skip", TouchRect(678, 398, 96, 56)),
+        )
     if screen is UIScreen.HOME:
         return (
+            ButtonLayout(UIAction.BACK, "Back", TouchRect(24, 20, 104, 52), "card"),
             ButtonLayout(
                 UIAction.ANALYZE,
                 "Analyze Meal",
-                TouchRect(180, 250, 440, 76),
+                TouchRect(210, 250, 380, 68),
             ),
             _home_pairing_button(pairing_state),
             EXIT_BUTTON,
@@ -220,7 +255,7 @@ def _home_pairing_button(pairing_state: PairingState | None) -> ButtonLayout:
         return ButtonLayout(
             UIAction.PAIR_DEVICE,
             "Device paired",
-            TouchRect(180, 342, 440, 76),
+            TouchRect(210, 330, 380, 58),
             "card",
             enabled=False,
         )
@@ -228,12 +263,12 @@ def _home_pairing_button(pairing_state: PairingState | None) -> ButtonLayout:
         return ButtonLayout(
             UIAction.PAIR_DEVICE,
             "Checking device...",
-            TouchRect(180, 342, 440, 76),
+            TouchRect(210, 330, 380, 58),
             "card",
             enabled=False,
         )
     return ButtonLayout(
-        UIAction.PAIR_DEVICE, "Pair Device", TouchRect(180, 342, 440, 76), "card"
+        UIAction.PAIR_DEVICE, "Pair Device", TouchRect(210, 330, 380, 58), "card"
     )
 
 
@@ -325,6 +360,7 @@ class MealCaptureWorkflow:
         store: TemporaryCaptureStore | None = None,
         simulated_weight: bool = False,
         pairing: PairingWorkflow | None = None,
+        startup_shell: StartupShell | None = None,
     ) -> None:
         self._camera = camera
         self._preview: PreviewSession | None = None
@@ -332,12 +368,47 @@ class MealCaptureWorkflow:
         self._store = store or TemporaryCaptureStore()
         self.simulated_weight = simulated_weight
         self.pairing = pairing
-        self.screen = UIScreen.HOME
+        self.startup_shell = startup_shell
+        self.screen = UIScreen.LOADING if startup_shell is not None else UIScreen.HOME
         self.error_message: str | None = None
         self.result_message: str | None = None
         self.recognized_foods: tuple[RecognizedFood, ...] = ()
         self.recognition_source: RecognitionSource | None = None
         self.analysis_response: MealAnalysisResponse | None = None
+
+    @property
+    def language(self) -> Language:
+        return (
+            self.startup_shell.preferences.language
+            if self.startup_shell is not None
+            else Language.ENGLISH
+        )
+
+    def tick_startup(self) -> None:
+        shell = self.startup_shell
+        if self.screen is not UIScreen.LOADING or shell is None:
+            return
+        if shell.completed < len(MILESTONES):
+            shell.complete(MILESTONES[shell.completed])
+        if shell.completed == len(MILESTONES):
+            self.screen = UIScreen.LANGUAGE
+
+    def select_language(self, language: Language) -> None:
+        if self.startup_shell is None:
+            return
+        self.startup_shell.select_language(language)
+        self.screen = (
+            UIScreen.INSTRUCTION
+            if self.startup_shell.preferences.show_intro_on_startup
+            else UIScreen.HOME
+        )
+
+    def toggle_intro(self) -> None:
+        if self.startup_shell is not None:
+            self.startup_shell.toggle_intro()
+
+    def continue_from_instruction(self) -> None:
+        self.screen = UIScreen.HOME
 
     def start_pairing(self) -> None:
         if self.pairing is not None and self.pairing.start():
@@ -382,6 +453,13 @@ class MealCaptureWorkflow:
         self._start_preview()
 
     def back(self) -> None:
+        if (
+            self.screen in {UIScreen.HOME, UIScreen.INSTRUCTION}
+            and self.startup_shell is not None
+        ):
+            self.home()
+            self.screen = UIScreen.LANGUAGE
+            return
         if self._close_preview():
             self.error_message = None
             self.screen = UIScreen.HOME
