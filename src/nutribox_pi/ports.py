@@ -12,9 +12,13 @@ from nutribox_pi.models import (
     DeviceIdentity,
     FoodRecognitionResult,
     HealthResult,
+    IngredientCandidateSelection,
+    IngredientVerification,
     MealAnalysisResponse,
+    MealAnalysisSelection,
     PairingSession,
     PairingStatusResponse,
+    PersonalRecipeSelection,
     PreviewFrame,
 )
 
@@ -41,6 +45,52 @@ class Backend(Protocol):
     def analyze_meal(
         self, image_path: Path, weight_grams: float, device_token: str | None = None
     ) -> MealAnalysisResponse | AnalysisResult: ...
+
+    def select_food_component(
+        self,
+        analysis_session_id: int,
+        selection: MealAnalysisSelection,
+        device_token: str | None = None,
+    ) -> MealAnalysisResponse: ...
+
+    def update_ingredients(
+        self,
+        analysis_session_id: int,
+        component_id: str,
+        update: IngredientVerification,
+        device_token: str | None = None,
+    ) -> MealAnalysisResponse: ...
+
+    def select_ingredient_candidate(
+        self,
+        analysis_session_id: int,
+        component_id: str,
+        selection: IngredientCandidateSelection,
+        device_token: str | None = None,
+    ) -> MealAnalysisResponse: ...
+
+    def use_recipe(
+        self,
+        analysis_session_id: int,
+        component_id: str,
+        selection: PersonalRecipeSelection,
+        device_token: str | None = None,
+    ) -> MealAnalysisResponse: ...
+
+    def review_recipe(
+        self,
+        analysis_session_id: int,
+        component_id: str,
+        selection: PersonalRecipeSelection,
+        device_token: str | None = None,
+    ) -> MealAnalysisResponse: ...
+
+    def analyze_component_as_new(
+        self,
+        analysis_session_id: int,
+        component_id: str,
+        device_token: str | None = None,
+    ) -> MealAnalysisResponse: ...
 
 
 class VerifiedDeviceCredentialProvider(Protocol):

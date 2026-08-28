@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
@@ -63,8 +64,34 @@ def _validate_decimal_string(value: str) -> None:
         parsed = Decimal(value)
     except (InvalidOperation, ValueError) as exc:
         raise ValueError("nutrition value must be a decimal string or null") from exc
-    if not parsed.is_finite():
+    if not parsed.is_finite() or parsed < 0:
         raise ValueError("nutrition value must be a decimal string or null")
+
+
+def _validate_text(value: str, *, maximum: int = 160) -> None:
+    if not isinstance(value, str) or not value.strip() or len(value) > maximum:
+        raise ValueError("text value is invalid")
+
+
+def _validate_uuid(value: str) -> None:
+    from uuid import UUID
+
+    if not isinstance(value, str) or str(UUID(value)) != value.lower():
+        raise ValueError("identifier is invalid")
+
+
+def _validate_positive_id(value: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError("identifier is invalid")
+
+
+def _validate_decimal_range(
+    value: str, *, positive: bool = False, maximum: Decimal | None = None
+) -> None:
+    _validate_decimal_string(value)
+    parsed = Decimal(value)
+    if (positive and parsed <= 0) or (maximum is not None and parsed > maximum):
+        raise ValueError("decimal value is outside the contract range")
 
 
 class RecognitionSource(StrEnum):
@@ -106,6 +133,112 @@ class DeviceIdentity:
 class RecognizedFood:
     name: str
 
+    def __post_init__(self) -> None:
+        _validate_text(self.name, maximum=120)
+
+
+@dataclass(frozen=True, slots=True)
+class MealAnalysisCandidate:
+    name: str
+    candidate_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _validate_text(self.name)
+        if self.candidate_id is not None:
+            _validate_uuid(self.candidate_id)
+
+
+@dataclass(frozen=True, slots=True)
+class PersonalRecipeMatch:
+    recipe_id: int
+    name: str
+    source: str
+
+    def __post_init__(self) -> None:
+        _validate_positive_id(self.recipe_id)
+        _validate_text(self.name)
+        if self.source != "personal":
+            raise ValueError("recipe source is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class SuggestedIngredient:
+    ingredient_id: str
+    name: str
+    suggested_proportion: str
+    ingredient_source: str
+    included: bool
+    weight_source: str
+    resolution_status: str
+    weight_grams: str | None = None
+    nutrition_source: str | None = None
+    resolved_reference: str | None = None
+    candidates: tuple[MealAnalysisCandidate, ...] = ()
+    recipe_derived: bool = False
+
+    def __post_init__(self) -> None:
+        _validate_uuid(self.ingredient_id)
+        _validate_text(self.name)
+        _validate_decimal_range(self.suggested_proportion, maximum=Decimal("1"))
+        for value in (
+            self.ingredient_source,
+            self.weight_source,
+            self.resolution_status,
+        ):
+            _validate_text(value)
+        if not isinstance(self.included, bool) or not isinstance(
+            self.recipe_derived, bool
+        ):
+            raise ValueError("ingredient flag is invalid")
+        if self.weight_grams is not None:
+            _validate_decimal_string(self.weight_grams)
+        for value in (self.nutrition_source, self.resolved_reference):
+            if value is not None:
+                _validate_text(value)
+
+
+@dataclass(frozen=True, slots=True)
+class MealAnalysisComponent:
+    component_id: str
+    recognized_name: str
+    raw_estimated_proportion: str
+    normalized_proportion: str
+    estimated_weight_grams: str
+    weight_source: str
+    resolution_status: str
+    nutrition_source: str | None
+    resolved_reference: str | None
+    candidates: tuple[MealAnalysisCandidate, ...]
+    nutrition: NutritionValues | None
+    suggested_ingredients: tuple[SuggestedIngredient, ...] = ()
+    recipe_matches: tuple[PersonalRecipeMatch, ...] = ()
+    composite_estimation: bool = False
+
+    def __post_init__(self) -> None:
+        _validate_uuid(self.component_id)
+        _validate_text(self.recognized_name)
+        _validate_decimal_range(self.raw_estimated_proportion, maximum=Decimal("1"))
+        _validate_decimal_range(self.normalized_proportion, maximum=Decimal("1"))
+        _validate_decimal_string(self.estimated_weight_grams)
+        _validate_text(self.weight_source)
+        _validate_text(self.resolution_status)
+        if not isinstance(self.composite_estimation, bool):
+            raise ValueError("component flag is invalid")
+        for value in (self.nutrition_source, self.resolved_reference):
+            if value is not None:
+                _validate_text(value)
+
+
+@dataclass(frozen=True, slots=True)
+class CalculatedFoodReference:
+    id: int | None
+    name: str
+
+    def __post_init__(self) -> None:
+        if self.id is not None:
+            _validate_positive_id(self.id)
+        _validate_text(self.name)
+
 
 @dataclass(frozen=True, slots=True)
 class FoodRecognitionResult:
@@ -120,9 +253,28 @@ class MealAnalysisResponse:
     status: AnalysisStatus
     recognized_foods: tuple[RecognizedFood, ...]
     recognition_source: RecognitionSource
-    measured_weight_grams: float | None = None
-    analysis_session_id: str | None = None
-    analysis_session_expires_at: str | None = None
+    measured_weight_grams: str | float | None = None
+    analysis_session_id: int | None = None
+    analysis_session_expires_at: datetime | None = None
+    components: tuple[MealAnalysisComponent, ...] | None = None
+
+    def __post_init__(self) -> None:
+        if self.analysis_session_id is not None:
+            _validate_positive_id(self.analysis_session_id)
+        if self.analysis_session_expires_at is not None and (
+            self.analysis_session_expires_at.tzinfo is None
+            or self.analysis_session_expires_at.utcoffset() is None
+        ):
+            raise ValueError("analysis expiry must include a timezone")
+        if isinstance(self.measured_weight_grams, str):
+            _validate_decimal_string(self.measured_weight_grams)
+        elif self.measured_weight_grams is not None and (
+            isinstance(self.measured_weight_grams, bool)
+            or not isinstance(self.measured_weight_grams, (int, float))
+            or not Decimal(str(self.measured_weight_grams)).is_finite()
+            or self.measured_weight_grams < 0
+        ):
+            raise ValueError("measured weight is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,8 +293,114 @@ class NutritionReferenceNotFoundResponse(MealAnalysisResponse):
 
 
 @dataclass(frozen=True, slots=True)
+class RequiresIngredientVerificationResponse(MealAnalysisResponse):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class RequiresRecipeConfirmationResponse(MealAnalysisResponse):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
 class CalculatedResponse(MealAnalysisResponse):
     nutrition: NutritionValues = field(kw_only=True)
+    weight_grams: str | None = field(default=None, kw_only=True)
+    weight_source: str | None = field(default=None, kw_only=True)
+    food: CalculatedFoodReference | None = field(default=None, kw_only=True)
+
+    def __post_init__(self) -> None:
+        super(CalculatedResponse, self).__post_init__()
+        if self.weight_grams is not None:
+            _validate_decimal_string(self.weight_grams)
+        if self.weight_source is not None:
+            _validate_text(self.weight_source)
+
+
+@dataclass(frozen=True, slots=True)
+class MealAnalysisSelection:
+    component_id: str
+    candidate_id: str | None
+
+    def __post_init__(self) -> None:
+        _validate_uuid(self.component_id)
+        if self.candidate_id is not None:
+            _validate_uuid(self.candidate_id)
+
+    def to_payload(self) -> dict[str, str | None]:
+        return {"component_id": self.component_id, "candidate_id": self.candidate_id}
+
+
+@dataclass(frozen=True, slots=True)
+class IngredientVerificationItem:
+    name: str
+    included: bool
+    ingredient_id: str | None = None
+    weight_grams: str | float | None = None
+
+    def __post_init__(self) -> None:
+        _validate_text(self.name)
+        if not isinstance(self.included, bool):
+            raise ValueError("ingredient flag is invalid")
+        if self.ingredient_id is not None:
+            _validate_uuid(self.ingredient_id)
+        if self.weight_grams is not None:
+            try:
+                parsed = Decimal(str(self.weight_grams))
+            except InvalidOperation as exc:
+                raise ValueError("ingredient weight is invalid") from exc
+            if not parsed.is_finite() or parsed <= 0 or parsed > 5000:
+                raise ValueError("ingredient weight is invalid")
+
+    def to_payload(self) -> dict[str, str | float | bool | None]:
+        payload: dict[str, str | float | bool | None] = {
+            "name": self.name,
+            "included": self.included,
+        }
+        if self.ingredient_id is not None:
+            payload["ingredient_id"] = self.ingredient_id
+        if self.weight_grams is not None:
+            payload["weight_grams"] = self.weight_grams
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class IngredientVerification:
+    ingredients: tuple[IngredientVerificationItem, ...]
+
+    def __post_init__(self) -> None:
+        if not 1 <= len(self.ingredients) <= 50:
+            raise ValueError("ingredient count is invalid")
+
+    def to_payload(self) -> dict[str, list[dict[str, object]]]:
+        return {"ingredients": [dict(item.to_payload()) for item in self.ingredients]}
+
+
+@dataclass(frozen=True, slots=True)
+class IngredientCandidateSelection:
+    ingredient_id: str
+    candidate_id: str
+
+    def __post_init__(self) -> None:
+        _validate_uuid(self.ingredient_id)
+        _validate_uuid(self.candidate_id)
+
+    def to_payload(self) -> dict[str, str]:
+        return {
+            "ingredient_id": self.ingredient_id,
+            "candidate_id": self.candidate_id,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PersonalRecipeSelection:
+    recipe_id: int
+
+    def __post_init__(self) -> None:
+        _validate_positive_id(self.recipe_id)
+
+    def to_payload(self) -> dict[str, int]:
+        return {"recipe_id": self.recipe_id}
 
 
 class CameraCode(StrEnum):

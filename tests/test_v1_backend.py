@@ -74,18 +74,19 @@ def test_health_accepts_any_successful_body_without_parsing() -> None:
 def _payload(status: AnalysisStatus) -> dict[str, object]:
     payload: dict[str, object] = {
         "status": status.value,
-        "recognized_foods": ["Rice"],
+        "recognized_foods": [{"name": "Rice"}],
         "recognition_source": "simulated",
     }
     if status is AnalysisStatus.CALCULATED:
         payload["nutrition"] = {
             "calories": "123.4",
-            "protein": "5.0",
-            "carbohydrates": "20.1",
-            "fat": None,
-            "fiber": "2",
-            "sodium": None,
+            "protein_g": "5.0",
+            "carbohydrates_g": "20.1",
+            "fat_g": "0",
+            "fiber_g": "2",
+            "sodium_mg": None,
         }
+        payload["weight_grams"] = "123.5"
     return payload
 
 
@@ -117,7 +118,7 @@ def test_analyze_accepts_exactly_documented_statuses(
     assert isinstance(result, response_type)
     if status is AnalysisStatus.CALCULATED:
         assert isinstance(result, CalculatedResponse)
-        assert result.nutrition.values["sodium"] is None
+        assert result.nutrition.values["sodium_mg"] is None
     assert method == "POST"
     assert url == "https://backend.test/api/meals/analyze"
     assert kwargs["data"] == {"weight_grams": "123.5"}

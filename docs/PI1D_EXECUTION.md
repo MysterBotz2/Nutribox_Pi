@@ -70,6 +70,32 @@ clear simulated-recognition label when applicable. A simulated-weight notice
 is shown only when the supplied weight adapter is simulated. Food-selection
 results list the returned candidates without inventing nutrition.
 
+## PI-3B3-A1 continuation transport boundary
+
+The typed backend boundary now recognizes exactly these initial-analysis
+outcomes: `calculated`, `food_not_recognized`,
+`nutrition_reference_not_found`, `requires_food_selection`,
+`requires_ingredient_verification`, and `requires_recipe_confirmation`.
+
+It integrates these continuation routes only at the adapter boundary:
+
+- `POST /api/meals/analysis-sessions/{analysis_session_id}/selections`
+- `PUT /api/meals/analysis-sessions/{analysis_session_id}/components/{component_id}/ingredients`
+- `POST /api/meals/analysis-sessions/{analysis_session_id}/components/{component_id}/ingredients/selections`
+- `POST /api/meals/analysis-sessions/{analysis_session_id}/components/{component_id}/use-recipe`
+- `POST /api/meals/analysis-sessions/{analysis_session_id}/components/{component_id}/review-recipe`
+- `POST /api/meals/analysis-sessions/{analysis_session_id}/components/{component_id}/analyze-as-new`
+
+Paired requests use exactly `X-Device-Token`; anonymous requests omit that
+header. The Pi never sends `Authorization` or Bearer credentials. Credentials
+and analysis-session identifiers are kept in memory only and are never
+rendered or logged. A device-authentication 401 remains distinguishable for
+the future revocation transition. HTTP 503/504, timeouts, and network failures
+remain retryable safe failures.
+
+Controller/workflow orchestration is deferred to PI-3B3-A2, ingredient UI to
+PI-3B3-B, and explicit Save Meal to a later checkpoint.
+
 ## Prepare the existing Pi environment
 
 Use the existing `.venv-pi`; do not create another environment. Install the
