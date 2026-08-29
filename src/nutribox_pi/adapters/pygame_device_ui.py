@@ -20,6 +20,7 @@ from nutribox_pi.device_ui import (
     CALCULATED_PAGINATION,
     CALCULATED_RIGHT_PANEL,
     CALCULATED_ROWS,
+    CALCULATED_THUMBNAIL,
     CARD,
     DANGER,
     DISPLAY_ERROR,
@@ -69,7 +70,7 @@ SUGAR = (194, 125, 218)
 REVIEW_BOUNDS = (620, 300)
 PREVIEW_BOUNDS = (420, 236)
 PREVIEW_INTERVAL_SECONDS = 1 / 15
-THUMBNAIL_BOUNDS = (150, 84)
+THUMBNAIL_BOUNDS = (180, 102)
 
 
 def display_flags_for(platform: str, fullscreen_flag: int) -> int:
@@ -164,8 +165,12 @@ class _UiImageCache:
         self.review_surface: Any | None = None
         self.thumbnail: Any | None = None
         self._image_path: object | None = None
+        self._meal_generation: int | None = None
 
-    def capture_review_image(self, pygame: Any, image_path: object) -> Any:
+    def capture_review_image(
+        self, pygame: Any, image_path: object, meal_generation: int
+    ) -> Any:
+        self.discard_if_stale(meal_generation)
         if self._image_path != image_path or self.review_surface is None:
             image = pygame.image.load(str(image_path))
             if tuple(image.get_size()) != (1920, 1080):
@@ -178,12 +183,26 @@ class _UiImageCache:
                 detached, scaled_image_size((1920, 1080), THUMBNAIL_BOUNDS)
             )
             self._image_path = image_path
+            self._meal_generation = meal_generation
         return self.review_surface
 
     def clear(self) -> None:
         self.review_surface = None
         self.thumbnail = None
         self._image_path = None
+        self._meal_generation = None
+
+    def clear_review(self) -> None:
+        """Release file-associated review state while retaining the detached copy."""
+        self.review_surface = None
+        self._image_path = None
+
+    def discard_if_stale(self, meal_generation: int) -> None:
+        if (
+            self._meal_generation is not None
+            and self._meal_generation != meal_generation
+        ):
+            self.clear()
 
 
 class _Fonts:
@@ -220,6 +239,9 @@ def _run_loop(
         workflow.tick_startup()
         workflow.tick_pairing()
         workflow.tick_continuation()
+        image_cache.discard_if_stale(_meal_generation(workflow))
+        if workflow.screen is UIScreen.HOME:
+            image_cache.clear()
         if workflow.screen is UIScreen.CAPTURE:
             now = time.monotonic()
             if now >= next_preview_at:
@@ -240,8 +262,10 @@ def _run_loop(
         )
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
+                image_cache.clear()
                 return UIResult(True, UI_CLOSED)
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                image_cache.clear()
                 return UIResult(True, UI_CLOSED)
             pointer = _pointer_event(pygame, event, down=True)
             if pointer is not None:
@@ -298,6 +322,7 @@ def _run_loop(
                 image_cache,
             )
             if outcome is not None:
+                image_cache.clear()
                 return outcome
             if workflow.screen is not active_press.screen:
                 _discard_pointer_events(pygame)
@@ -383,7 +408,7 @@ def _apply_action(
         workflow.perform_capture()
     elif action is UIAction.ANALYZE_MEAL:
         if image_cache is not None:
-            image_cache.clear()
+            image_cache.clear_review()
         workflow.begin_analysis()
         _render(pygame, screen, fonts, workflow, None)
         pygame.event.pump()
@@ -460,6 +485,7 @@ def _render(
 ) -> None:
     _draw_grid(pygame, screen)
     cache = image_cache or _UiImageCache()
+    cache.discard_if_stale(_meal_generation(workflow))
     if workflow.screen is UIScreen.LOADING:
         _render_loading(pygame, screen, fonts, workflow)
     elif workflow.screen is UIScreen.LANGUAGE:
@@ -513,6 +539,10 @@ def _food_selection(workflow: MealCaptureWorkflow) -> FoodSelectionView | None:
 
 def _nutrition_view(workflow: MealCaptureWorkflow) -> NutritionView | None:
     return workflow.nutrition_view if workflow.screen is UIScreen.CALCULATED else None
+
+
+def _meal_generation(workflow: MealCaptureWorkflow) -> int:
+    return getattr(workflow, "meal_generation", 0)
 
 
 def _localized_button(
@@ -761,7 +791,9 @@ def _render_review(
     image_path = workflow.review_image
     if image_path is None:
         raise RuntimeError
-    image = image_cache.capture_review_image(pygame, image_path)
+    image = image_cache.capture_review_image(
+        pygame, image_path, _meal_generation(workflow)
+    )
     language = workflow.language
     _draw_card(pygame, screen, (20, 20, 520, 420))
     image_size = tuple(image.get_size())
@@ -953,7 +985,7 @@ def _render_nutrition_contents(
         (400, 40),
         NUTRIBOX_BLUE,
     )
-    _render_meal_summary(screen, fonts, response, language)
+    _render_meal_summary(pygame, screen, fonts, response, language, thumbnail)
     rows = _nutrition_rows(response, view.tab, language)
     start = view.page * NUTRITION_ROWS_PER_PAGE
     for index, (label, value, unit, color) in enumerate(
@@ -990,32 +1022,45 @@ def _render_nutrition_contents(
 
 
 def _render_meal_summary(
-    screen: Any, fonts: _Fonts, response: CalculatedResponse, language: Language
+    pygame: Any,
+    screen: Any,
+    fonts: _Fonts,
+    response: CalculatedResponse,
+    language: Language,
+    thumbnail: Any | None,
 ) -> None:
     food = response.recognized_foods[0].name if response.recognized_foods else "Meal"
     x = CALCULATED_LEFT_PANEL.x + CALCULATED_LEFT_PANEL.width // 2
     _draw_text(
-        screen, fonts.body, text(language, "meal_summary"), (x, 116), NUTRIBOX_BLUE
+        screen, fonts.body, text(language, "meal_summary"), (x, 108), NUTRIBOX_BLUE
     )
     _draw_text(
         screen,
         fonts.small,
+        text(language, "captured_meal"),
+        (x, 130),
+        SECONDARY_TEXT,
+    )
+    _draw_summary_thumbnail(pygame, screen, thumbnail)
+    _draw_text(
+        screen,
+        fonts.small,
         _ellipsize(fonts.small, food, 210),
-        (x, 154),
+        (x, 262),
         PRIMARY_TEXT,
     )
     _draw_text(
         screen,
         fonts.small,
         text(language, "analyzed_weight"),
-        (x, 198),
+        (x, 294),
         SECONDARY_TEXT,
     )
     _draw_text(
         screen,
         fonts.body,
         _format_nutrition(response.weight_grams, "g", language),
-        (x, 228),
+        (x, 322),
         PRIMARY_TEXT,
     )
     if response.recognition_source.value == "simulated":
@@ -1023,9 +1068,23 @@ def _render_meal_summary(
             screen,
             fonts.small,
             text(language, "simulated_recognition"),
-            (x, 270),
+            (x, 355),
             SECONDARY_TEXT,
         )
+
+
+def _draw_summary_thumbnail(pygame: Any, screen: Any, thumbnail: Any | None) -> None:
+    rectangle = CALCULATED_THUMBNAIL
+    pygame.draw.rect(screen, ELEVATED_SURFACE, rectangle.as_tuple(), border_radius=10)
+    pygame.draw.rect(screen, BORDER, rectangle.as_tuple(), width=2, border_radius=10)
+    if thumbnail is None:
+        return
+    source_size = tuple(thumbnail.get_size())
+    target_size = scaled_image_size(source_size, (rectangle.width, rectangle.height))
+    surface = pygame.transform.smoothscale(thumbnail, target_size)
+    left = rectangle.x + (rectangle.width - target_size[0]) // 2
+    top = rectangle.y + (rectangle.height - target_size[1]) // 2
+    screen.blit(surface, (left, top))
 
 
 def _nutrition_rows(

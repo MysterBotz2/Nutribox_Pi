@@ -15,6 +15,7 @@ from nutribox_pi.device_ui import (
     CALCULATED_RIGHT_PANEL,
     CALCULATED_ROWS,
     CALCULATED_TAB_RECTS,
+    CALCULATED_THUMBNAIL,
     DISPLAY_SIZE,
     MealCaptureWorkflow,
     NutritionTab,
@@ -241,8 +242,13 @@ def test_sdl_dummy_calculated_pages_fit_viewport() -> None:
             for tab in NutritionTab:
                 for page in range(NutritionView(tab).page_count):
                     workflow.nutrition_view = NutritionView(tab, page)
+                    cache = pygame_device_ui._UiImageCache()
+                    cache.thumbnail = pygame.Surface((180, 102))
+                    cache.thumbnail.fill((12, 34, 56))
                     surface.fill((255, 255, 255))
-                    pygame_device_ui._render(pygame, surface, fonts, workflow, None)
+                    pygame_device_ui._render(
+                        pygame, surface, fonts, workflow, None, image_cache=cache
+                    )
                     bounds = surface.get_bounding_rect(min_alpha=1)
                     assert bounds.left >= 0 and bounds.top >= 0
                     assert bounds.right <= 800 and bounds.bottom <= 480
@@ -284,3 +290,98 @@ def test_calculated_actions_are_dispatched_without_backend_or_identifier_output(
     )
     assert flow.tabs == [NutritionTab.MICROS]
     assert flow.calls == ["next", "previous"]
+
+
+def test_thumbnail_aspect_fit_stays_inside_the_meal_summary_panel() -> None:
+    for source in ((1920, 1080), (1080, 1920), (1000, 1000)):
+        width, height = pygame_device_ui.scaled_image_size(
+            source,
+            (CALCULATED_THUMBNAIL.width, CALCULATED_THUMBNAIL.height),
+        )
+        assert width <= CALCULATED_THUMBNAIL.width
+        assert height <= CALCULATED_THUMBNAIL.height
+        assert (
+            width * source[1] == height * source[0]
+            or abs(width / height - source[0] / source[1]) < 0.02
+        )
+    assert not _overlap(CALCULATED_THUMBNAIL, CALCULATED_ROWS)
+    assert CALCULATED_LEFT_PANEL.x <= CALCULATED_THUMBNAIL.x
+    assert CALCULATED_THUMBNAIL.x + CALCULATED_THUMBNAIL.width <= (
+        CALCULATED_LEFT_PANEL.x + CALCULATED_LEFT_PANEL.width
+    )
+    assert CALCULATED_LEFT_PANEL.y <= CALCULATED_THUMBNAIL.y
+    assert CALCULATED_THUMBNAIL.y + CALCULATED_THUMBNAIL.height <= (
+        CALCULATED_LEFT_PANEL.y + CALCULATED_LEFT_PANEL.height
+    )
+
+
+def test_detached_thumbnail_survives_confirmed_image_cleanup_without_disk_copy(
+    tmp_path,
+) -> None:
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    pygame = pytest.importorskip("pygame")
+    pygame.init()
+    image_path = tmp_path / "meal.jpg"
+    try:
+        original = pygame.Surface((1920, 1080))
+        original.fill((12, 34, 56))
+        pygame.image.save(original, image_path)
+        cache = pygame_device_ui._UiImageCache()
+
+        cache.capture_review_image(pygame, image_path, meal_generation=7)
+
+        assert cache.thumbnail is not None
+        assert cache.thumbnail.get_size()[0] <= CALCULATED_THUMBNAIL.width
+        image_path.unlink()
+        assert cache.thumbnail.get_size()[0] > 0
+        assert list(tmp_path.iterdir()) == []
+        cache.clear_review()
+        assert cache.thumbnail is not None
+        cache.clear()
+        assert cache.thumbnail is None
+    finally:
+        pygame.quit()
+        for module in tuple(sys.modules):
+            if module == "pygame" or module.startswith("pygame."):
+                sys.modules.pop(module, None)
+
+
+@pytest.mark.parametrize("action", [UIAction.HOME, UIAction.RETAKE, UIAction.EXIT])
+def test_terminal_navigation_clears_renderer_thumbnail(action: UIAction) -> None:
+    class Flow:
+        screen = UIScreen.CALCULATED
+
+        def home(self) -> None:
+            self.screen = UIScreen.HOME
+
+        def retake(self) -> None:
+            self.screen = UIScreen.CAPTURE
+
+    cache = pygame_device_ui._UiImageCache()
+    cache.thumbnail = object()
+
+    pygame_device_ui._apply_action(
+        object(), object(), object(), Flow(), action, image_cache=cache
+    )
+
+    assert cache.thumbnail is None
+
+
+def test_generation_signal_clears_thumbnail_without_rendering_home() -> None:
+    cache = pygame_device_ui._UiImageCache()
+    cache.thumbnail = object()
+    cache._meal_generation = 7
+
+    cache.discard_if_stale(8)
+
+    assert cache.thumbnail is None
+
+
+def test_retryable_same_meal_generation_retains_thumbnail() -> None:
+    cache = pygame_device_ui._UiImageCache()
+    cache.thumbnail = object()
+    cache._meal_generation = 7
+
+    cache.discard_if_stale(7)
+
+    assert cache.thumbnail is not None

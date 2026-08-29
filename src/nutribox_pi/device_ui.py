@@ -150,6 +150,7 @@ FOOD_SELECTION_LIMITATION = "Food selection is unavailable for this analysis."
 CALCULATED_HEADER = TouchRect(20, 16, 760, 48)
 CALCULATED_LEFT_PANEL = TouchRect(20, 80, 250, 300)
 CALCULATED_RIGHT_PANEL = TouchRect(284, 80, 496, 300)
+CALCULATED_THUMBNAIL = TouchRect(55, 140, 180, 102)
 CALCULATED_TAB_RECTS = (
     TouchRect(296, 94, 144, 44),
     TouchRect(448, 94, 144, 44),
@@ -569,6 +570,7 @@ class MealCaptureWorkflow:
         self.analysis_retry_available = False
         self._food_selection = FoodSelectionView((), 0, None, False, False)
         self._nutrition_view = NutritionView()
+        self._meal_generation = 0
 
     @property
     def language(self) -> Language:
@@ -658,6 +660,11 @@ class MealCaptureWorkflow:
     def nutrition_view(self) -> NutritionView:
         return self._nutrition_view
 
+    @property
+    def meal_generation(self) -> int:
+        """Opaque lifecycle signal for renderer-owned transient image state."""
+        return self._meal_generation
+
     def select_nutrition_tab(self, tab: NutritionTab) -> None:
         if self.screen is UIScreen.CALCULATED:
             self._nutrition_view = NutritionView(tab)
@@ -732,15 +739,22 @@ class MealCaptureWorkflow:
             self.screen = UIScreen.HOME
             return
         if state is ContinuationState.TERMINAL_ERROR:
+            message = self.continuation.error_message or ANALYSIS_ERROR
             self._food_selection = FoodSelectionView((), 0, None, False, False)
+            self._clear_analysis_state()
             self.screen = UIScreen.ERROR
-            self.error_message = self.continuation.error_message or ANALYSIS_ERROR
+            self.error_message = message
+            return
+        if state is ContinuationState.CANCELLED:
+            self._clear_analysis_state()
+            self.screen = UIScreen.HOME
             return
         response = self.continuation.response
         if response is not None:
             self._show_analysis_response(response)
 
     def analyze(self) -> None:
+        self._advance_meal_generation()
         self.error_message = None
         self.result_message = None
         self.recognized_foods = ()
@@ -904,6 +918,7 @@ class MealCaptureWorkflow:
         if self.pairing is not None:
             self.pairing.close()
         self.continuation.close()
+        self._advance_meal_generation()
         preview_closed = self._close_preview()
         if not preview_closed or not self._store.cleanup():
             self.screen = UIScreen.ERROR
@@ -951,8 +966,10 @@ class MealCaptureWorkflow:
         self.error_message = message
         self.captured_weight_grams = None
         self.analysis_retry_available = False
+        self._advance_meal_generation()
 
     def _clear_analysis_state(self) -> None:
+        self._advance_meal_generation()
         self.continuation.home()
         self._food_selection = FoodSelectionView((), 0, None, False, False)
         self.recognized_foods = ()
@@ -961,6 +978,9 @@ class MealCaptureWorkflow:
         self.captured_weight_grams = None
         self.analysis_retry_available = False
         self._nutrition_view = NutritionView()
+
+    def _advance_meal_generation(self) -> None:
+        self._meal_generation = getattr(self, "_meal_generation", 0) + 1
 
     def _show_analysis_response(self, response: MealAnalysisResponse) -> None:
         self.screen = STATUS_SCREENS[response.status]
