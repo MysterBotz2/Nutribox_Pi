@@ -20,6 +20,7 @@ from nutribox_pi.device_ui import (
     UIAction,
     UIScreen,
     buttons_for,
+    normalize_ingredient_name,
 )
 from nutribox_pi.models import (
     AnalysisStatus,
@@ -231,3 +232,60 @@ def test_view_cannot_hold_identifiers() -> None:
     view = IngredientVerificationView(("meal",), ("rice",), (True,), 0, 0, False, False)
     assert view.names == ("rice",)
     assert "id" not in view.__dataclass_fields__
+
+
+def test_edit_and_add_are_local_until_confirmation(tmp_path: Path) -> None:
+    flow, backend = _workflow(tmp_path, ingredients=2)
+    flow.edit_ingredient(0)
+    assert flow.screen is UIScreen.INGREDIENT_EDITOR
+    assert flow.ingredient_editor is not None
+    assert flow.ingredient_editor.draft == "ingredient 0"
+    flow.editor_clear()
+    flow.append_editor_text("  Fresh  ingredient  ")
+    flow.apply_ingredient_editor()
+    assert flow.ingredient_verification.names[0] == "Fresh ingredient"
+    assert flow.ingredient_verification.included[0] is True
+    flow.add_ingredient()
+    flow.append_editor_text("manual")
+    flow.apply_ingredient_editor()
+    assert flow.ingredient_verification.names[-1] == "manual"
+    assert flow.ingredient_verification.included[-1] is True
+    assert backend.calls == []
+    flow.confirm_ingredients()
+    assert [item.name for item in backend.calls[0][2].ingredients] == [
+        "Fresh ingredient",
+        "ingredient 1",
+        "manual",
+    ]
+
+
+def test_editor_cancel_invalid_and_duplicate_drafts_do_not_change_rows(
+    tmp_path: Path,
+) -> None:
+    flow, _ = _workflow(tmp_path, ingredients=2)
+    original = flow.ingredient_verification.names
+    flow.edit_ingredient(0)
+    flow.editor_clear()
+    flow.append_editor_text("ingredient 1")
+    flow.apply_ingredient_editor()
+    assert flow.screen is UIScreen.INGREDIENT_EDITOR
+    assert flow.ingredient_editor is not None and flow.ingredient_editor.error
+    flow.cancel_ingredient_editor()
+    assert flow.ingredient_verification.names == original
+    assert normalize_ingredient_name(" \n ") is None
+    assert normalize_ingredient_name("x" * 161) is None
+    assert normalize_ingredient_name("Munggo") == "Munggo"
+
+
+def test_editor_and_checkbox_rectangles_are_separate() -> None:
+    view = IngredientVerificationView(("meal",), ("rice",), (True,), 0, 0, False, False)
+    buttons = buttons_for(
+        UIScreen.REQUIRES_INGREDIENT_VERIFICATION, ingredient_verification=view
+    )
+    checkbox = next(
+        button for button in buttons if button.action is UIAction.TOGGLE_INGREDIENT_0
+    )
+    edit = next(
+        button for button in buttons if button.action is UIAction.EDIT_INGREDIENT_0
+    )
+    assert checkbox.rectangle.x + checkbox.rectangle.width <= edit.rectangle.x

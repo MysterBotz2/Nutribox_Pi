@@ -224,6 +224,7 @@ class _PointerPress:
     source: tuple[str, int | None]
     screen: UIScreen
     action: UIAction
+    key: str | None = None
 
 
 def _run_loop(
@@ -268,6 +269,13 @@ def _run_loop(
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                 image_cache.clear()
                 return UIResult(True, UI_CLOSED)
+            if workflow.screen is UIScreen.INGREDIENT_EDITOR:
+                if event.type == getattr(pygame, "TEXTINPUT", object()):
+                    workflow.append_editor_text(getattr(event, "text", ""))
+                    continue
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_BACKSPACE:
+                    workflow.editor_backspace()
+                    continue
             pointer = _pointer_event(pygame, event, down=True)
             if pointer is not None:
                 source, point = pointer
@@ -281,7 +289,12 @@ def _run_loop(
                 )
                 if pressed is not None or action is None:
                     continue
-                pressed = _PointerPress(source, workflow.screen, action)
+                pressed = _PointerPress(
+                    source,
+                    workflow.screen,
+                    action,
+                    _editor_key_at(workflow.screen, point),
+                )
                 _render(
                     pygame,
                     screen,
@@ -323,6 +336,7 @@ def _run_loop(
                 active_press.action,
                 preview_cache.surface,
                 image_cache,
+                active_press.key,
             )
             if outcome is not None:
                 image_cache.clear()
@@ -346,6 +360,7 @@ def _apply_action(
     action: UIAction | None,
     preview_surface: Any | None = None,
     image_cache: _UiImageCache | None = None,
+    key: str | None = None,
 ) -> UIResult | None:
     if action is None:
         return None
@@ -418,6 +433,34 @@ def _apply_action(
         if image_cache is not None:
             image_cache.clear()
         workflow.retake()
+    elif action in {
+        UIAction.EDIT_INGREDIENT_0,
+        UIAction.EDIT_INGREDIENT_1,
+        UIAction.EDIT_INGREDIENT_2,
+        UIAction.EDIT_INGREDIENT_3,
+    }:
+        workflow.edit_ingredient(
+            (
+                UIAction.EDIT_INGREDIENT_0,
+                UIAction.EDIT_INGREDIENT_1,
+                UIAction.EDIT_INGREDIENT_2,
+                UIAction.EDIT_INGREDIENT_3,
+            ).index(action)
+        )
+    elif action is UIAction.ADD_INGREDIENT:
+        workflow.add_ingredient()
+    elif action is UIAction.EDITOR_KEY and key is not None:
+        workflow.append_editor_text(key)
+    elif action is UIAction.EDITOR_SPACE:
+        workflow.append_editor_text(" ")
+    elif action is UIAction.EDITOR_BACKSPACE:
+        workflow.editor_backspace()
+    elif action is UIAction.EDITOR_CLEAR:
+        workflow.editor_clear()
+    elif action is UIAction.EDITOR_CANCEL:
+        workflow.cancel_ingredient_editor()
+    elif action is UIAction.EDITOR_DONE:
+        workflow.apply_ingredient_editor()
     elif action is UIAction.NUTRITION_OVERVIEW:
         workflow.select_nutrition_tab(NutritionTab.OVERVIEW)
     elif action is UIAction.NUTRITION_MACROS:
@@ -539,6 +582,8 @@ def _render(
         _render_ingredient_verification(
             pygame, screen, fonts, workflow, cache.thumbnail
         )
+    elif workflow.screen is UIScreen.INGREDIENT_EDITOR:
+        _render_ingredient_editor(pygame, screen, fonts, workflow)
     elif workflow.screen in RESULT_SCREENS:
         _render_result(pygame, screen, fonts, workflow, cache.thumbnail)
     elif workflow.screen is UIScreen.RECOGNIZED_FOODS:
@@ -587,6 +632,15 @@ def _ingredient_verification(
         if workflow.screen is UIScreen.REQUIRES_INGREDIENT_VERIFICATION
         else None
     )
+
+
+def _editor_key_at(screen: UIScreen, point: tuple[float, float]) -> str | None:
+    if screen is not UIScreen.INGREDIENT_EDITOR:
+        return None
+    for button in buttons_for(screen):
+        if button.action is UIAction.EDITOR_KEY and button.rectangle.contains(*point):
+            return button.label
+    return None
 
 
 def _meal_generation(workflow: MealCaptureWorkflow) -> int:
@@ -1028,6 +1082,27 @@ def _render_ingredient_verification(
             (400, 370),
             SECONDARY_TEXT,
         )
+
+
+def _render_ingredient_editor(
+    pygame: Any, screen: Any, fonts: _Fonts, workflow: MealCaptureWorkflow
+) -> None:
+    editor = workflow.ingredient_editor
+    if editor is None:
+        return
+    title = text(
+        workflow.language,
+        "add_ingredient" if editor.target_index is None else "edit_ingredient",
+    )
+    _draw_text(screen, fonts.subheading, title, (400, 42), NUTRIBOX_BLUE)
+    _draw_card(pygame, screen, (32, 78, 736, 96))
+    visible = _ellipsize(fonts.body, editor.draft, 680)
+    _draw_text(screen, fonts.body, visible or " ", (400, 116), PRIMARY_TEXT)
+    _draw_text(
+        screen, fonts.small, f"{len(editor.draft)}/160", (700, 154), SECONDARY_TEXT
+    )
+    if editor.error:
+        _draw_text(screen, fonts.small, editor.error, (400, 184), DANGER)
 
 
 def _render_result(

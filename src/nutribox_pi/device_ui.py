@@ -16,6 +16,8 @@ from nutribox_pi.continuation import (
 from nutribox_pi.controller import NutriBoxController
 from nutribox_pi.models import (
     AnalysisStatus,
+    IngredientVerification,
+    IngredientVerificationItem,
     MealAnalysisResponse,
     PreviewFrame,
     RecognitionSource,
@@ -83,6 +85,7 @@ class UIScreen(StrEnum):
     REQUIRES_FOOD_SELECTION = "requires_food_selection"
     FOOD_SELECTION = "food_selection"
     REQUIRES_INGREDIENT_VERIFICATION = "requires_ingredient_verification"
+    INGREDIENT_EDITOR = "ingredient_editor"
     REQUIRES_RECIPE_CONFIRMATION = "requires_recipe_confirmation"
     NUTRITION_REFERENCE_NOT_FOUND = "nutrition_reference_not_found"
     RECOGNIZED_FOODS = "recognized_foods"
@@ -129,6 +132,17 @@ class UIAction(StrEnum):
     COMPONENT_NEXT = "component_next"
     CONFIRM_INGREDIENTS = "confirm_ingredients"
     RESCAN = "rescan"
+    EDIT_INGREDIENT_0 = "edit_ingredient_0"
+    EDIT_INGREDIENT_1 = "edit_ingredient_1"
+    EDIT_INGREDIENT_2 = "edit_ingredient_2"
+    EDIT_INGREDIENT_3 = "edit_ingredient_3"
+    ADD_INGREDIENT = "add_ingredient"
+    EDITOR_SPACE = "editor_space"
+    EDITOR_BACKSPACE = "editor_backspace"
+    EDITOR_CLEAR = "editor_clear"
+    EDITOR_CANCEL = "editor_cancel"
+    EDITOR_DONE = "editor_done"
+    EDITOR_KEY = "editor_key"
     NUTRITION_OVERVIEW = "nutrition_overview"
     NUTRITION_MACROS = "nutrition_macros"
     NUTRITION_MICROS = "nutrition_micros"
@@ -224,6 +238,23 @@ class IngredientVerificationView:
     retry_available: bool
 
 
+@dataclass(frozen=True, slots=True)
+class IngredientEditorView:
+    draft: str
+    target_index: int | None
+    error: str | None
+
+
+def normalize_ingredient_name(value: str) -> str | None:
+    """Apply the Web-compatible trim while rejecting controls locally."""
+    if not isinstance(value, str) or any(
+        ord(char) < 32 or ord(char) == 127 for char in value
+    ):
+        return None
+    normalized = " ".join(value.split())
+    return normalized if 1 <= len(normalized) <= 160 else None
+
+
 def buttons_for(
     screen: UIScreen,
     pairing_state: PairingState | None = None,
@@ -311,6 +342,8 @@ def buttons_for(
             ingredient_verification
             or IngredientVerificationView((), (), (), 0, 0, False, False)
         )
+    if screen is UIScreen.INGREDIENT_EDITOR:
+        return _ingredient_editor_buttons()
     if screen in RESULT_SCREENS:
         return (
             ButtonLayout(
@@ -475,11 +508,29 @@ def _ingredient_verification_buttons(
             action,
             f"{'[x]' if view.included[start + offset] else '[ ]'} "
             f"{view.names[start + offset]}",
-            TouchRect(28, 150 + offset * 46, 500, 42),
+            TouchRect(28, 150 + offset * 46, 420, 42),
             "primary" if view.included[start + offset] else "card",
             not view.request_in_progress,
         )
         for offset, action in enumerate(actions)
+        if start + offset < len(view.names)
+    )
+    edits = tuple(
+        ButtonLayout(
+            action,
+            "Edit",
+            TouchRect(456, 150 + offset * 46, 72, 42),
+            "card",
+            not view.request_in_progress,
+        )
+        for offset, action in enumerate(
+            (
+                UIAction.EDIT_INGREDIENT_0,
+                UIAction.EDIT_INGREDIENT_1,
+                UIAction.EDIT_INGREDIENT_2,
+                UIAction.EDIT_INGREDIENT_3,
+            )
+        )
         if start + offset < len(view.names)
     )
     page_count = max(
@@ -492,6 +543,13 @@ def _ingredient_verification_buttons(
             TouchRect(548, 112, 224, 42),
             "card",
             view.component_index > 0 and not view.request_in_progress,
+        ),
+        ButtonLayout(
+            UIAction.ADD_INGREDIENT,
+            "Add Ingredient",
+            TouchRect(548, 256, 224, 42),
+            "card",
+            len(view.names) < 50 and not view.request_in_progress,
         ),
         ButtonLayout(
             UIAction.COMPONENT_NEXT,
@@ -546,18 +604,58 @@ def _ingredient_verification_buttons(
         ButtonLayout(UIAction.EXIT, "Exit", TouchRect(660, 402, 112, 58), "danger"),
     )
     if view.retry_available:
-        return rows + (
-            ButtonLayout(UIAction.RETRY, "Retry", TouchRect(308, 402, 212, 58)),
-            ButtonLayout(
-                UIAction.RESCAN, "Rescan", TouchRect(28, 402, 130, 58), "card"
-            ),
-            ButtonLayout(
-                UIAction.RETAKE, "Retake", TouchRect(168, 402, 130, 58), "card"
-            ),
-            ButtonLayout(UIAction.HOME, "Home", TouchRect(532, 402, 120, 58), "card"),
-            ButtonLayout(UIAction.EXIT, "Exit", TouchRect(660, 402, 112, 58), "danger"),
+        return (
+            rows
+            + edits
+            + (
+                ButtonLayout(UIAction.RETRY, "Retry", TouchRect(308, 402, 212, 58)),
+                ButtonLayout(
+                    UIAction.RESCAN, "Rescan", TouchRect(28, 402, 130, 58), "card"
+                ),
+                ButtonLayout(
+                    UIAction.RETAKE, "Retake", TouchRect(168, 402, 130, 58), "card"
+                ),
+                ButtonLayout(
+                    UIAction.HOME, "Home", TouchRect(532, 402, 120, 58), "card"
+                ),
+                ButtonLayout(
+                    UIAction.EXIT, "Exit", TouchRect(660, 402, 112, 58), "danger"
+                ),
+            )
         )
-    return rows + side
+    return rows + edits + side
+
+
+def _ingredient_editor_buttons() -> tuple[ButtonLayout, ...]:
+    rows = ("QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM")
+    buttons: list[ButtonLayout] = []
+    for row_index, keys in enumerate(rows):
+        width = 54
+        start = (800 - len(keys) * width) // 2
+        for index, key in enumerate(keys):
+            buttons.append(
+                ButtonLayout(
+                    UIAction.EDITOR_KEY,
+                    key,
+                    TouchRect(start + index * width, 210 + row_index * 52, 50, 46),
+                    "card",
+                )
+            )
+    return tuple(buttons) + (
+        ButtonLayout(
+            UIAction.EDITOR_SPACE, "Space", TouchRect(180, 366, 170, 54), "card"
+        ),
+        ButtonLayout(
+            UIAction.EDITOR_BACKSPACE, "Backspace", TouchRect(360, 366, 120, 54), "card"
+        ),
+        ButtonLayout(
+            UIAction.EDITOR_CLEAR, "Clear", TouchRect(490, 366, 100, 54), "card"
+        ),
+        ButtonLayout(
+            UIAction.EDITOR_CANCEL, "Cancel", TouchRect(24, 426, 180, 46), "card"
+        ),
+        ButtonLayout(UIAction.EDITOR_DONE, "Done", TouchRect(596, 426, 180, 46)),
+    )
 
 
 def _home_pairing_button(pairing_state: PairingState | None) -> ButtonLayout:
@@ -703,6 +801,8 @@ class MealCaptureWorkflow:
             (), (), (), 0, 0, False, False
         )
         self._ingredient_inclusions: tuple[tuple[bool, ...], ...] = ()
+        self._ingredient_items: tuple[tuple[IngredientVerificationItem, ...], ...] = ()
+        self._ingredient_editor: IngredientEditorView | None = None
         self._nutrition_view = NutritionView()
         self._meal_generation = 0
 
@@ -799,6 +899,10 @@ class MealCaptureWorkflow:
         return self._ingredient_verification
 
     @property
+    def ingredient_editor(self) -> IngredientEditorView | None:
+        return self._ingredient_editor
+
+    @property
     def meal_generation(self) -> int:
         """Opaque lifecycle signal for renderer-owned transient image state."""
         return self._meal_generation
@@ -871,6 +975,14 @@ class MealCaptureWorkflow:
             return
         states[view.component_index] = tuple(included)
         self._ingredient_inclusions = tuple(states)
+        items = list(self._ingredient_items)
+        items[view.component_index] = tuple(
+            replace(item, included=selected)
+            for item, selected in zip(
+                items[view.component_index], included, strict=True
+            )
+        )
+        self._ingredient_items = tuple(items)
         self._ingredient_verification = replace(view, included=tuple(included))
 
     def next_ingredient_page(self) -> None:
@@ -906,8 +1018,9 @@ class MealCaptureWorkflow:
         if view.request_in_progress or not any(view.included):
             return
         try:
-            submitted = self.continuation.confirm_ingredient_ordinals(
-                view.component_index, view.included
+            submitted = self.continuation.confirm_ingredient_items(
+                view.component_index,
+                IngredientVerification(self._ingredient_items[view.component_index]),
             )
         except Exception:
             self.screen = UIScreen.ERROR
@@ -922,6 +1035,79 @@ class MealCaptureWorkflow:
             self._ingredient_verification = replace(
                 view, request_in_progress=True, retry_available=False
             )
+
+    def edit_ingredient(self, visible_slot: int) -> None:
+        view = self._ingredient_verification
+        index = view.page * FOOD_SELECTION_PAGE_SIZE + visible_slot
+        if view.request_in_progress or not 0 <= index < len(view.names):
+            return
+        self._ingredient_editor = IngredientEditorView(view.names[index], index, None)
+        self.screen = UIScreen.INGREDIENT_EDITOR
+
+    def add_ingredient(self) -> None:
+        view = self._ingredient_verification
+        if view.request_in_progress or len(view.names) >= 50:
+            return
+        self._ingredient_editor = IngredientEditorView("", None, None)
+        self.screen = UIScreen.INGREDIENT_EDITOR
+
+    def append_editor_text(self, value: str) -> None:
+        editor = self._ingredient_editor
+        if editor is None:
+            return
+        candidate = editor.draft + value
+        self._ingredient_editor = replace(editor, draft=candidate[:160], error=None)
+
+    def editor_backspace(self) -> None:
+        if self._ingredient_editor is not None:
+            self._ingredient_editor = replace(
+                self._ingredient_editor,
+                draft=self._ingredient_editor.draft[:-1],
+                error=None,
+            )
+
+    def editor_clear(self) -> None:
+        if self._ingredient_editor is not None:
+            self._ingredient_editor = replace(
+                self._ingredient_editor, draft="", error=None
+            )
+
+    def cancel_ingredient_editor(self) -> None:
+        if self._ingredient_editor is not None:
+            self._ingredient_editor = None
+            self.screen = UIScreen.REQUIRES_INGREDIENT_VERIFICATION
+
+    def apply_ingredient_editor(self) -> None:
+        editor = self._ingredient_editor
+        view = self._ingredient_verification
+        if editor is None:
+            return
+        name = normalize_ingredient_name(editor.draft)
+        existing = tuple(
+            item.name.casefold()
+            for index, item in enumerate(self._ingredient_items[view.component_index])
+            if index != editor.target_index
+        )
+        if name is None or name.casefold() in existing:
+            self._ingredient_editor = replace(
+                editor, error="Enter a unique valid ingredient."
+            )
+            return
+        component_items = list(self._ingredient_items[view.component_index])
+        if editor.target_index is None:
+            component_items.append(IngredientVerificationItem(name, True))
+        else:
+            current = component_items[editor.target_index]
+            component_items[editor.target_index] = replace(current, name=name)
+        all_items = list(self._ingredient_items)
+        all_items[view.component_index] = tuple(component_items)
+        self._ingredient_items = tuple(all_items)
+        self._ingredient_inclusions = tuple(
+            tuple(item.included for item in items) for items in self._ingredient_items
+        )
+        self._ingredient_editor = None
+        self._set_ingredient_component(view.component_index)
+        self.screen = UIScreen.REQUIRES_INGREDIENT_VERIFICATION
 
     def tick_continuation(self) -> None:
         before = self.continuation.state
@@ -1190,6 +1376,8 @@ class MealCaptureWorkflow:
             (), (), (), 0, 0, False, False
         )
         self._ingredient_inclusions = ()
+        self._ingredient_items = ()
+        self._ingredient_editor = None
         self.recognized_foods = ()
         self.recognition_source = None
         self.analysis_response = None
@@ -1231,13 +1419,17 @@ class MealCaptureWorkflow:
                 self.continuation.ingredient_initial_inclusions(index)
                 for index in range(len(component_names))
             )
+            self._ingredient_items = tuple(
+                self.continuation.ingredient_items(index)
+                for index in range(len(component_names))
+            )
             self._set_ingredient_component(0)
 
     def _set_ingredient_component(self, index: int) -> None:
         component_names = self.continuation.ingredient_component_names
         if not 0 <= index < len(component_names):
             return
-        names = self.continuation.ingredient_names(index)
+        names = tuple(item.name for item in self._ingredient_items[index])
         inclusions = self._ingredient_inclusions[index]
         self._ingredient_verification = IngredientVerificationView(
             component_names,

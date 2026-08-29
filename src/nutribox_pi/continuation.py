@@ -193,6 +193,18 @@ class MealAnalysisContinuationWorkflow:
             ).suggested_ingredients
         )
 
+    def ingredient_items(
+        self, component_index: int
+    ) -> tuple[IngredientVerificationItem, ...]:
+        return tuple(
+            IngredientVerificationItem(
+                item.name, item.included, item.ingredient_id, item.weight_grams
+            )
+            for item in self._ingredient_component(
+                component_index
+            ).suggested_ingredients
+        )
+
     def confirm_ingredient_ordinals(
         self, component_index: int, inclusions: tuple[bool, ...]
     ) -> bool:
@@ -214,6 +226,19 @@ class MealAnalysisContinuationWorkflow:
                 for ingredient, included in zip(ingredients, inclusions, strict=True)
             )
         )
+        return self.update_ingredients(component.component_id, update)
+
+    def confirm_ingredient_items(
+        self, component_index: int, update: IngredientVerification
+    ) -> bool:
+        """Submit private edited/manual items for a renderer ordinal component."""
+        component = self._ingredient_component(component_index)
+        allowed = {item.ingredient_id for item in component.suggested_ingredients}
+        if any(
+            item.ingredient_id is not None and item.ingredient_id not in allowed
+            for item in update.ingredients
+        ):
+            raise ContinuationError("meal analysis ingredient is unavailable")
         return self.update_ingredients(component.component_id, update)
 
     def select_ingredient_candidate(
