@@ -93,8 +93,32 @@ rendered or logged. A device-authentication 401 remains distinguishable for
 the future revocation transition. HTTP 503/504, timeouts, and network failures
 remain retryable safe failures.
 
-Controller/workflow orchestration is deferred to PI-3B3-A2, ingredient UI to
-PI-3B3-B, and explicit Save Meal to a later checkpoint.
+Ingredient UI remains deferred to PI-3B3-B, and explicit Save Meal remains a
+later checkpoint.
+
+## PI-3B3-A2 continuation orchestration
+
+PI-3B3-A2 introduces a hardware-independent, in-memory continuation workflow.
+It is the sole owner of the active typed analysis response and its backend
+session data; the renderer receives no session, component, candidate, or
+credential identifiers.  The workflow represents each of the six typed backend
+outcomes explicitly, as well as idle, request-in-progress, retryable-error,
+terminal-error, revoked, and cancelled orchestration states.
+
+Typed food-selection, ingredient-update, ingredient-candidate, recipe-use,
+recipe-review, and component-as-new actions are permitted only for the matching
+current response and backend-issued identifiers.  They are fenced against
+duplicate and stale completions.  Session state is memory-only and is cleared
+on a new analysis, Home, Retake, cancellation, revocation, Exit, and terminal
+completion where it is no longer needed.
+
+Each continuation obtains the current verified device credential immediately
+before its adapter request.  It is passed only as `X-Device-Token` and is never
+stored with session state, rendered, or logged.  A confirmed 401 revokes the
+pairing and clears the active continuation.  HTTP 503/504, timeout, and network
+failures retain the typed pre-request response for one explicit safe Retry,
+which obtains the credential again.  Pygame ingredient screens remain PI-3B3-B;
+explicit Save Meal remains a later checkpoint.
 
 ## Prepare the existing Pi environment
 

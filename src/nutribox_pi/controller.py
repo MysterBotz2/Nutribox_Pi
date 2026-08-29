@@ -5,7 +5,15 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from nutribox_pi.models import AnalysisResult, HealthResult, MealAnalysisResponse
+from nutribox_pi.models import (
+    AnalysisResult,
+    HealthResult,
+    IngredientCandidateSelection,
+    IngredientVerification,
+    MealAnalysisResponse,
+    MealAnalysisSelection,
+    PersonalRecipeSelection,
+)
 from nutribox_pi.ports import (
     Backend,
     DeviceAuthenticationFailure,
@@ -64,6 +72,87 @@ class NutriBoxController:
         if isinstance(result, MealAnalysisResponse):
             return replace(result, measured_weight_grams=weight_grams)
         return result
+
+    def select_food_component(
+        self, analysis_session_id: int, selection: MealAnalysisSelection
+    ) -> MealAnalysisResponse:
+        """Submit a validated food/component choice for the active session."""
+        return self._continuation(
+            "select_food_component", analysis_session_id, selection
+        )
+
+    def update_ingredients(
+        self,
+        analysis_session_id: int,
+        component_id: str,
+        update: IngredientVerification,
+    ) -> MealAnalysisResponse:
+        return self._continuation(
+            "update_ingredients", analysis_session_id, component_id, update
+        )
+
+    def select_ingredient_candidate(
+        self,
+        analysis_session_id: int,
+        component_id: str,
+        selection: IngredientCandidateSelection,
+    ) -> MealAnalysisResponse:
+        return self._continuation(
+            "select_ingredient_candidate", analysis_session_id, component_id, selection
+        )
+
+    def use_recipe(
+        self,
+        analysis_session_id: int,
+        component_id: str,
+        selection: PersonalRecipeSelection,
+    ) -> MealAnalysisResponse:
+        return self._continuation(
+            "use_recipe", analysis_session_id, component_id, selection
+        )
+
+    def review_recipe(
+        self,
+        analysis_session_id: int,
+        component_id: str,
+        selection: PersonalRecipeSelection,
+    ) -> MealAnalysisResponse:
+        return self._continuation(
+            "review_recipe", analysis_session_id, component_id, selection
+        )
+
+    def analyze_component_as_new(
+        self, analysis_session_id: int, component_id: str
+    ) -> MealAnalysisResponse:
+        return self._continuation(
+            "analyze_component_as_new", analysis_session_id, component_id
+        )
+
+    def _continuation(self, operation: str, *values: object) -> MealAnalysisResponse:
+        """Invoke an adapter continuation with a freshly verified credential.
+
+        The analysis-session identifier is supplied only by the in-memory
+        continuation workflow.  Keeping it out of this controller prevents it
+        becoming another state owner.
+        """
+        if not values or not isinstance(values[0], int):
+            raise ValueError("analysis session identifier is invalid")
+        session_id, *request_values = values
+        token = (
+            self._credential_provider.get_verified_device_token()
+            if self._credential_provider
+            else None
+        )
+        backend_operation = getattr(self._backend, operation)
+        try:
+            if token is None:
+                return backend_operation(session_id, *request_values)
+            return backend_operation(session_id, *request_values, device_token=token)
+        except DeviceAuthenticationFailure:
+            revoke = getattr(self._credential_provider, "confirm_revocation", None)
+            if callable(revoke):
+                revoke()
+            raise
 
     def current_temperature_c(self) -> float:
         return validate_temperature(self._temperature_sensor.read_celsius())

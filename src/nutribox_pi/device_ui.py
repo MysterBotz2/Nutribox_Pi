@@ -5,10 +5,11 @@ from __future__ import annotations
 import os
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
+from nutribox_pi.continuation import MealAnalysisContinuationWorkflow
 from nutribox_pi.controller import NutriBoxController
 from nutribox_pi.models import (
     AnalysisStatus,
@@ -366,6 +367,9 @@ class MealCaptureWorkflow:
         self._camera = camera
         self._preview: PreviewSession | None = None
         self._controller = controller
+        # The continuation workflow, not the renderer, owns active backend
+        # session data.  PI-3B3-B will add the corresponding controls.
+        self.continuation = MealAnalysisContinuationWorkflow(controller)
         self._store = store or TemporaryCaptureStore()
         self.simulated_weight = simulated_weight
         self.simulated_camera = bool(getattr(camera, "is_simulated", False))
@@ -407,11 +411,7 @@ class MealCaptureWorkflow:
             and self.startup_shell.preferences.show_intro_on_startup
         )
         self._startup_language_selection = False
-        self.screen = (
-            UIScreen.INSTRUCTION
-            if show_intro
-            else UIScreen.HOME
-        )
+        self.screen = UIScreen.INSTRUCTION if show_intro else UIScreen.HOME
 
     def toggle_intro(self) -> None:
         if self.startup_shell is not None:
@@ -436,6 +436,7 @@ class MealCaptureWorkflow:
             self._close_preview()
             self._store.cleanup()
             self._clear_analysis_state()
+            self.continuation.revoke()
             self.screen = UIScreen.HOME
             return
         screens = {
@@ -472,6 +473,7 @@ class MealCaptureWorkflow:
         self.analysis_response = None
         self.captured_weight_grams = None
         self.analysis_retry_available = False
+        self.continuation.home()
         self._start_preview()
 
     def back(self) -> None:
@@ -495,6 +497,7 @@ class MealCaptureWorkflow:
         self.analysis_response = None
         self.captured_weight_grams = None
         self.analysis_retry_available = False
+        self.continuation.home()
         self.screen = UIScreen.CAPTURING
 
     def perform_capture(self) -> None:
@@ -556,6 +559,7 @@ class MealCaptureWorkflow:
         except DeviceAuthenticationFailure:
             self._store.cleanup()
             self._clear_analysis_state()
+            self.continuation.revoke()
             self.screen = UIScreen.HOME
             return
         except Exception:
@@ -585,7 +589,15 @@ class MealCaptureWorkflow:
         self.screen = STATUS_SCREENS[result.status]
         self.result_message = RESULT_MESSAGES[result.status]
         if isinstance(result, MealAnalysisResponse):
-            self.analysis_response = result
+            self.continuation.accept_initial_response(result)
+            # The renderer receives a presentation-only response.  The
+            # continuation workflow exclusively owns opaque backend IDs.
+            self.analysis_response = replace(
+                result,
+                analysis_session_id=None,
+                analysis_session_expires_at=None,
+                components=None,
+            )
             self.recognized_foods = result.recognized_foods
             self.recognition_source = result.recognition_source
         self.captured_weight_grams = None
@@ -621,6 +633,7 @@ class MealCaptureWorkflow:
     def close(self) -> UIResult:
         if self.pairing is not None:
             self.pairing.close()
+        self.continuation.close()
         preview_closed = self._close_preview()
         if not preview_closed or not self._store.cleanup():
             self.screen = UIScreen.ERROR
@@ -670,6 +683,7 @@ class MealCaptureWorkflow:
         self.analysis_retry_available = False
 
     def _clear_analysis_state(self) -> None:
+        self.continuation.home()
         self.recognized_foods = ()
         self.recognition_source = None
         self.analysis_response = None
