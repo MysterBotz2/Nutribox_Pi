@@ -119,6 +119,16 @@ class UIAction(StrEnum):
     FOOD_PREVIOUS = "food_previous"
     FOOD_NEXT = "food_next"
     FOOD_CONTINUE = "food_continue"
+    TOGGLE_INGREDIENT_0 = "toggle_ingredient_0"
+    TOGGLE_INGREDIENT_1 = "toggle_ingredient_1"
+    TOGGLE_INGREDIENT_2 = "toggle_ingredient_2"
+    TOGGLE_INGREDIENT_3 = "toggle_ingredient_3"
+    INGREDIENT_PREVIOUS = "ingredient_previous"
+    INGREDIENT_NEXT = "ingredient_next"
+    COMPONENT_PREVIOUS = "component_previous"
+    COMPONENT_NEXT = "component_next"
+    CONFIRM_INGREDIENTS = "confirm_ingredients"
+    RESCAN = "rescan"
     NUTRITION_OVERVIEW = "nutrition_overview"
     NUTRITION_MACROS = "nutrition_macros"
     NUTRITION_MICROS = "nutrition_micros"
@@ -201,11 +211,25 @@ class FoodSelectionView:
     retry_available: bool
 
 
+@dataclass(frozen=True, slots=True)
+class IngredientVerificationView:
+    """Renderer-safe suggestion projection; all backend IDs remain private."""
+
+    component_names: tuple[str, ...]
+    names: tuple[str, ...]
+    included: tuple[bool, ...]
+    component_index: int
+    page: int
+    request_in_progress: bool
+    retry_available: bool
+
+
 def buttons_for(
     screen: UIScreen,
     pairing_state: PairingState | None = None,
     food_selection: FoodSelectionView | None = None,
     nutrition_view: NutritionView | None = None,
+    ingredient_verification: IngredientVerificationView | None = None,
 ) -> tuple[ButtonLayout, ...]:
     if screen is UIScreen.LOADING:
         return ()
@@ -281,6 +305,11 @@ def buttons_for(
     if screen is UIScreen.FOOD_SELECTION:
         return _food_selection_buttons(
             food_selection or FoodSelectionView((), 0, None, False, False)
+        )
+    if screen is UIScreen.REQUIRES_INGREDIENT_VERIFICATION:
+        return _ingredient_verification_buttons(
+            ingredient_verification
+            or IngredientVerificationView((), (), (), 0, 0, False, False)
         )
     if screen in RESULT_SCREENS:
         return (
@@ -397,11 +426,9 @@ def _calculated_buttons(view: NutritionView) -> tuple[ButtonLayout, ...]:
             action,
             label,
             rectangle,
-            (
-                "primary"
-                if view.tab.value == action.removeprefix("nutrition_")
-                else "card"
-            ),
+            "primary"
+            if view.tab.value == action.removeprefix("nutrition_")
+            else "card",
         )
         for action, label, rectangle in zip(
             tab_actions, tab_labels, CALCULATED_TAB_RECTS, strict=True
@@ -433,6 +460,106 @@ def _calculated_buttons(view: NutritionView) -> tuple[ButtonLayout, ...]:
     )
 
 
+def _ingredient_verification_buttons(
+    view: IngredientVerificationView,
+) -> tuple[ButtonLayout, ...]:
+    actions = (
+        UIAction.TOGGLE_INGREDIENT_0,
+        UIAction.TOGGLE_INGREDIENT_1,
+        UIAction.TOGGLE_INGREDIENT_2,
+        UIAction.TOGGLE_INGREDIENT_3,
+    )
+    start = view.page * FOOD_SELECTION_PAGE_SIZE
+    rows = tuple(
+        ButtonLayout(
+            action,
+            f"{'[x]' if view.included[start + offset] else '[ ]'} "
+            f"{view.names[start + offset]}",
+            TouchRect(28, 150 + offset * 46, 500, 42),
+            "primary" if view.included[start + offset] else "card",
+            not view.request_in_progress,
+        )
+        for offset, action in enumerate(actions)
+        if start + offset < len(view.names)
+    )
+    page_count = max(
+        1, (len(view.names) + FOOD_SELECTION_PAGE_SIZE - 1) // FOOD_SELECTION_PAGE_SIZE
+    )
+    side = (
+        ButtonLayout(
+            UIAction.COMPONENT_PREVIOUS,
+            "Previous meal part",
+            TouchRect(548, 112, 224, 42),
+            "card",
+            view.component_index > 0 and not view.request_in_progress,
+        ),
+        ButtonLayout(
+            UIAction.COMPONENT_NEXT,
+            "Next meal part",
+            TouchRect(548, 160, 224, 42),
+            "card",
+            view.component_index + 1 < len(view.component_names)
+            and not view.request_in_progress,
+        ),
+        ButtonLayout(
+            UIAction.INGREDIENT_PREVIOUS,
+            "Previous",
+            TouchRect(548, 208, 108, 42),
+            "card",
+            view.page > 0 and not view.request_in_progress,
+        ),
+        ButtonLayout(
+            UIAction.INGREDIENT_NEXT,
+            "Next",
+            TouchRect(664, 208, 108, 42),
+            "card",
+            view.page + 1 < page_count and not view.request_in_progress,
+        ),
+        ButtonLayout(
+            UIAction.RESCAN,
+            "Rescan",
+            TouchRect(28, 402, 130, 58),
+            "card",
+            not view.request_in_progress,
+        ),
+        ButtonLayout(
+            UIAction.RETAKE,
+            "Retake",
+            TouchRect(168, 402, 130, 58),
+            "card",
+            not view.request_in_progress,
+        ),
+        ButtonLayout(
+            UIAction.CONFIRM_INGREDIENTS,
+            "Confirm ingredients",
+            TouchRect(308, 402, 212, 58),
+            "primary",
+            any(view.included) and not view.request_in_progress,
+        ),
+        ButtonLayout(
+            UIAction.HOME,
+            "Home",
+            TouchRect(532, 402, 120, 58),
+            "card",
+            not view.request_in_progress,
+        ),
+        ButtonLayout(UIAction.EXIT, "Exit", TouchRect(660, 402, 112, 58), "danger"),
+    )
+    if view.retry_available:
+        return rows + (
+            ButtonLayout(UIAction.RETRY, "Retry", TouchRect(308, 402, 212, 58)),
+            ButtonLayout(
+                UIAction.RESCAN, "Rescan", TouchRect(28, 402, 130, 58), "card"
+            ),
+            ButtonLayout(
+                UIAction.RETAKE, "Retake", TouchRect(168, 402, 130, 58), "card"
+            ),
+            ButtonLayout(UIAction.HOME, "Home", TouchRect(532, 402, 120, 58), "card"),
+            ButtonLayout(UIAction.EXIT, "Exit", TouchRect(660, 402, 112, 58), "danger"),
+        )
+    return rows + side
+
+
 def _home_pairing_button(pairing_state: PairingState | None) -> ButtonLayout:
     if pairing_state is PairingState.PAIRED:
         return ButtonLayout(
@@ -462,8 +589,11 @@ def action_at(
     pairing_state: PairingState | None = None,
     food_selection: FoodSelectionView | None = None,
     nutrition_view: NutritionView | None = None,
+    ingredient_verification: IngredientVerificationView | None = None,
 ) -> UIAction | None:
-    for button in buttons_for(screen, pairing_state, food_selection, nutrition_view):
+    for button in buttons_for(
+        screen, pairing_state, food_selection, nutrition_view, ingredient_verification
+    ):
         if button.enabled and button.rectangle.contains(x, y):
             return button.action
     return None
@@ -569,6 +699,10 @@ class MealCaptureWorkflow:
         self.captured_weight_grams: float | None = None
         self.analysis_retry_available = False
         self._food_selection = FoodSelectionView((), 0, None, False, False)
+        self._ingredient_verification = IngredientVerificationView(
+            (), (), (), 0, 0, False, False
+        )
+        self._ingredient_inclusions: tuple[tuple[bool, ...], ...] = ()
         self._nutrition_view = NutritionView()
         self._meal_generation = 0
 
@@ -661,6 +795,10 @@ class MealCaptureWorkflow:
         return self._nutrition_view
 
     @property
+    def ingredient_verification(self) -> IngredientVerificationView:
+        return self._ingredient_verification
+
+    @property
     def meal_generation(self) -> int:
         """Opaque lifecycle signal for renderer-owned transient image state."""
         return self._meal_generation
@@ -721,6 +859,70 @@ class MealCaptureWorkflow:
                 view, request_in_progress=True, retry_available=False
             )
 
+    def toggle_ingredient(self, visible_slot: int) -> None:
+        view = self._ingredient_verification
+        index = view.page * FOOD_SELECTION_PAGE_SIZE + visible_slot
+        if view.request_in_progress or not 0 <= index < len(view.included):
+            return
+        included = list(view.included)
+        included[index] = not included[index]
+        states = list(self._ingredient_inclusions)
+        if not 0 <= view.component_index < len(states):
+            return
+        states[view.component_index] = tuple(included)
+        self._ingredient_inclusions = tuple(states)
+        self._ingredient_verification = replace(view, included=tuple(included))
+
+    def next_ingredient_page(self) -> None:
+        view = self._ingredient_verification
+        pages = max(
+            1,
+            (len(view.names) + FOOD_SELECTION_PAGE_SIZE - 1)
+            // FOOD_SELECTION_PAGE_SIZE,
+        )
+        if view.page + 1 < pages and not view.request_in_progress:
+            self._ingredient_verification = replace(view, page=view.page + 1)
+
+    def previous_ingredient_page(self) -> None:
+        view = self._ingredient_verification
+        if view.page > 0 and not view.request_in_progress:
+            self._ingredient_verification = replace(view, page=view.page - 1)
+
+    def next_ingredient_component(self) -> None:
+        view = self._ingredient_verification
+        if (
+            view.component_index + 1 < len(view.component_names)
+            and not view.request_in_progress
+        ):
+            self._set_ingredient_component(view.component_index + 1)
+
+    def previous_ingredient_component(self) -> None:
+        view = self._ingredient_verification
+        if view.component_index > 0 and not view.request_in_progress:
+            self._set_ingredient_component(view.component_index - 1)
+
+    def confirm_ingredients(self) -> None:
+        view = self._ingredient_verification
+        if view.request_in_progress or not any(view.included):
+            return
+        try:
+            submitted = self.continuation.confirm_ingredient_ordinals(
+                view.component_index, view.included
+            )
+        except Exception:
+            self.screen = UIScreen.ERROR
+            self.error_message = ANALYSIS_ERROR
+            return
+        if submitted:
+            self._ingredient_verification = replace(view, request_in_progress=True)
+
+    def retry_ingredient_verification(self) -> None:
+        view = self._ingredient_verification
+        if view.retry_available and self.continuation.retry():
+            self._ingredient_verification = replace(
+                view, request_in_progress=True, retry_available=False
+            )
+
     def tick_continuation(self) -> None:
         before = self.continuation.state
         self.continuation.tick()
@@ -731,8 +933,15 @@ class MealCaptureWorkflow:
             self._food_selection = replace(
                 self._food_selection, request_in_progress=False, retry_available=True
             )
+            self._ingredient_verification = replace(
+                self._ingredient_verification,
+                request_in_progress=False,
+                retry_available=True,
+            )
             return
         if state is ContinuationState.REVOKED:
+            if self.pairing is not None:
+                self.pairing.confirm_revocation()
             self._store.cleanup()
             self._clear_analysis_state()
             self.continuation.revoke()
@@ -846,6 +1055,8 @@ class MealCaptureWorkflow:
             self.analysis_retry_available = True
             return
         except DeviceAuthenticationFailure:
+            if self.pairing is not None:
+                self.pairing.confirm_revocation()
             self._store.cleanup()
             self._clear_analysis_state()
             self.continuation.revoke()
@@ -897,6 +1108,9 @@ class MealCaptureWorkflow:
     def retry(self) -> None:
         if self.screen is UIScreen.FOOD_SELECTION:
             self.retry_food_selection()
+            return
+        if self.screen is UIScreen.REQUIRES_INGREDIENT_VERIFICATION:
+            self.retry_ingredient_verification()
             return
         if self.analysis_retry_available and self._store.image_path is not None:
             self.analysis_retry_available = False
@@ -972,6 +1186,10 @@ class MealCaptureWorkflow:
         self._advance_meal_generation()
         self.continuation.home()
         self._food_selection = FoodSelectionView((), 0, None, False, False)
+        self._ingredient_verification = IngredientVerificationView(
+            (), (), (), 0, 0, False, False
+        )
+        self._ingredient_inclusions = ()
         self.recognized_foods = ()
         self.recognition_source = None
         self.analysis_response = None
@@ -1002,6 +1220,34 @@ class MealCaptureWorkflow:
                 self.error_message = FOOD_SELECTION_LIMITATION
                 return
             self._food_selection = FoodSelectionView(names, 0, None, False, False)
+        elif response.status is AnalysisStatus.REQUIRES_INGREDIENT_VERIFICATION:
+            component_names = self.continuation.ingredient_component_names
+            if not component_names:
+                self._ingredient_verification = IngredientVerificationView(
+                    (), (), (), 0, 0, False, False
+                )
+                return
+            self._ingredient_inclusions = tuple(
+                self.continuation.ingredient_initial_inclusions(index)
+                for index in range(len(component_names))
+            )
+            self._set_ingredient_component(0)
+
+    def _set_ingredient_component(self, index: int) -> None:
+        component_names = self.continuation.ingredient_component_names
+        if not 0 <= index < len(component_names):
+            return
+        names = self.continuation.ingredient_names(index)
+        inclusions = self._ingredient_inclusions[index]
+        self._ingredient_verification = IngredientVerificationView(
+            component_names,
+            names,
+            inclusions,
+            index,
+            0,
+            False,
+            False,
+        )
 
     def _cleanup_or_error(self) -> bool:
         if self._store.cleanup():

@@ -21,6 +21,7 @@ from nutribox_pi.models import (
     AnalysisStatus,
     IngredientCandidateSelection,
     IngredientVerification,
+    IngredientVerificationItem,
     MealAnalysisCandidate,
     MealAnalysisComponent,
     MealAnalysisResponse,
@@ -168,6 +169,52 @@ class MealAnalysisContinuationWorkflow:
                 session_id, component_id, update
             )
         )
+
+    @property
+    def ingredient_component_names(self) -> tuple[str, ...]:
+        """Safe labels for ingredient-confirmation component navigation."""
+        return tuple(component.recognized_name for component in self._ingredients())
+
+    def ingredient_names(self, component_index: int) -> tuple[str, ...]:
+        """Return presentation-only ingredient names for one component."""
+        return tuple(
+            ingredient.name
+            for ingredient in self._ingredient_component(
+                component_index
+            ).suggested_ingredients
+        )
+
+    def ingredient_initial_inclusions(self, component_index: int) -> tuple[bool, ...]:
+        """Return the authoritative backend-supplied initial checkbox state."""
+        return tuple(
+            ingredient.included
+            for ingredient in self._ingredient_component(
+                component_index
+            ).suggested_ingredients
+        )
+
+    def confirm_ingredient_ordinals(
+        self, component_index: int, inclusions: tuple[bool, ...]
+    ) -> bool:
+        """Submit a renderer ordinal projection without disclosing identifiers."""
+        component = self._ingredient_component(component_index)
+        ingredients = component.suggested_ingredients
+        if len(inclusions) != len(ingredients) or not any(inclusions):
+            raise ContinuationError("meal analysis ingredient is unavailable")
+        if any(not isinstance(included, bool) for included in inclusions):
+            raise ContinuationError("meal analysis ingredient is unavailable")
+        update = IngredientVerification(
+            tuple(
+                IngredientVerificationItem(
+                    ingredient.name,
+                    included,
+                    ingredient.ingredient_id,
+                    ingredient.weight_grams,
+                )
+                for ingredient, included in zip(ingredients, inclusions, strict=True)
+            )
+        )
+        return self.update_ingredients(component.component_id, update)
 
     def select_ingredient_candidate(
         self, component_id: str, selection: IngredientCandidateSelection
@@ -341,6 +388,28 @@ class MealAnalysisContinuationWorkflow:
             for candidate in component.candidates
             if candidate.candidate_id is not None
         )
+
+    def _ingredients(self) -> tuple[MealAnalysisComponent, ...]:
+        response = self._response
+        if (
+            self._state is not ContinuationState.REQUIRES_INGREDIENT_VERIFICATION
+            or response is None
+            or response.analysis_session_id is None
+            or response.components is None
+        ):
+            return ()
+        return response.components
+
+    def _ingredient_component(self, index: int) -> MealAnalysisComponent:
+        if isinstance(index, bool) or not isinstance(index, int):
+            raise ContinuationError("meal analysis ingredient is unavailable")
+        components = self._ingredients()
+        if not 0 <= index < len(components):
+            raise ContinuationError("meal analysis ingredient is unavailable")
+        component = components[index]
+        if not component.suggested_ingredients:
+            raise ContinuationError("meal analysis ingredient is unavailable")
+        return component
 
     def _require_state(self, state: ContinuationState) -> None:
         if self._state is not state:

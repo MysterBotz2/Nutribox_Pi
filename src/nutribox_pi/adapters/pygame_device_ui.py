@@ -37,6 +37,7 @@ from nutribox_pi.device_ui import (
     UI_CLOSED,
     ButtonLayout,
     FoodSelectionView,
+    IngredientVerificationView,
     MealCaptureWorkflow,
     NutritionTab,
     NutritionView,
@@ -276,6 +277,7 @@ def _run_loop(
                     _pairing_state(workflow),
                     _food_selection(workflow),
                     _nutrition_view(workflow),
+                    _ingredient_verification(workflow),
                 )
                 if pressed is not None or action is None:
                     continue
@@ -307,6 +309,7 @@ def _run_loop(
                     _pairing_state(workflow),
                     _food_selection(workflow),
                     _nutrition_view(workflow),
+                    _ingredient_verification(workflow),
                 )
                 is not active_press.action
             ):
@@ -387,6 +390,34 @@ def _apply_action(
         workflow.next_food_selection_page()
     elif action is UIAction.FOOD_CONTINUE:
         workflow.continue_food_selection()
+    elif action in {
+        UIAction.TOGGLE_INGREDIENT_0,
+        UIAction.TOGGLE_INGREDIENT_1,
+        UIAction.TOGGLE_INGREDIENT_2,
+        UIAction.TOGGLE_INGREDIENT_3,
+    }:
+        workflow.toggle_ingredient(
+            (
+                UIAction.TOGGLE_INGREDIENT_0,
+                UIAction.TOGGLE_INGREDIENT_1,
+                UIAction.TOGGLE_INGREDIENT_2,
+                UIAction.TOGGLE_INGREDIENT_3,
+            ).index(action)
+        )
+    elif action is UIAction.INGREDIENT_PREVIOUS:
+        workflow.previous_ingredient_page()
+    elif action is UIAction.INGREDIENT_NEXT:
+        workflow.next_ingredient_page()
+    elif action is UIAction.COMPONENT_PREVIOUS:
+        workflow.previous_ingredient_component()
+    elif action is UIAction.COMPONENT_NEXT:
+        workflow.next_ingredient_component()
+    elif action is UIAction.CONFIRM_INGREDIENTS:
+        workflow.confirm_ingredients()
+    elif action is UIAction.RESCAN:
+        if image_cache is not None:
+            image_cache.clear()
+        workflow.retake()
     elif action is UIAction.NUTRITION_OVERVIEW:
         workflow.select_nutrition_tab(NutritionTab.OVERVIEW)
     elif action is UIAction.NUTRITION_MACROS:
@@ -426,6 +457,8 @@ def _apply_action(
     elif action is UIAction.RETRY:
         if workflow.screen is UIScreen.FOOD_SELECTION:
             workflow.retry_food_selection()
+        elif workflow.screen is UIScreen.REQUIRES_INGREDIENT_VERIFICATION:
+            workflow.retry_ingredient_verification()
         elif workflow.screen in {UIScreen.PAIR_EXPIRED, UIScreen.PAIR_ERROR}:
             workflow.start_pairing()
         else:
@@ -502,6 +535,10 @@ def _render(
         _render_analyzing(pygame, screen, fonts, workflow)
     elif workflow.screen is UIScreen.FOOD_SELECTION:
         _render_food_selection(pygame, screen, fonts, workflow)
+    elif workflow.screen is UIScreen.REQUIRES_INGREDIENT_VERIFICATION:
+        _render_ingredient_verification(
+            pygame, screen, fonts, workflow, cache.thumbnail
+        )
     elif workflow.screen in RESULT_SCREENS:
         _render_result(pygame, screen, fonts, workflow, cache.thumbnail)
     elif workflow.screen is UIScreen.RECOGNIZED_FOODS:
@@ -521,6 +558,7 @@ def _render(
         _pairing_state(workflow),
         _food_selection(workflow),
         _nutrition_view(workflow),
+        _ingredient_verification(workflow),
     ):
         button = _localized_button(button, workflow)
         _draw_button(pygame, screen, fonts.button, button, pressed is button.action)
@@ -539,6 +577,16 @@ def _food_selection(workflow: MealCaptureWorkflow) -> FoodSelectionView | None:
 
 def _nutrition_view(workflow: MealCaptureWorkflow) -> NutritionView | None:
     return workflow.nutrition_view if workflow.screen is UIScreen.CALCULATED else None
+
+
+def _ingredient_verification(
+    workflow: MealCaptureWorkflow,
+) -> IngredientVerificationView | None:
+    return (
+        workflow.ingredient_verification
+        if workflow.screen is UIScreen.REQUIRES_INGREDIENT_VERIFICATION
+        else None
+    )
 
 
 def _meal_generation(workflow: MealCaptureWorkflow) -> int:
@@ -560,6 +608,12 @@ def _localized_button(
         UIAction.FOOD_PREVIOUS: "previous",
         UIAction.FOOD_NEXT: "next",
         UIAction.FOOD_CONTINUE: "continue_food",
+        UIAction.CONFIRM_INGREDIENTS: "confirm_ingredients",
+        UIAction.RESCAN: "rescan",
+        UIAction.COMPONENT_PREVIOUS: "previous_component",
+        UIAction.COMPONENT_NEXT: "next_component",
+        UIAction.INGREDIENT_PREVIOUS: "previous",
+        UIAction.INGREDIENT_NEXT: "next",
         UIAction.NUTRITION_OVERVIEW: "nutrition_overview",
         UIAction.NUTRITION_MACROS: "nutrition_macros",
         UIAction.NUTRITION_MICROS: "nutrition_micros",
@@ -891,6 +945,87 @@ def _render_food_selection(
             fonts.small,
             text(workflow.language, "food_selection_retry"),
             (400, 338),
+            SECONDARY_TEXT,
+        )
+
+
+def _render_ingredient_verification(
+    pygame: Any,
+    screen: Any,
+    fonts: _Fonts,
+    workflow: MealCaptureWorkflow,
+    thumbnail: Any | None,
+) -> None:
+    """Draw only the safe ordinal suggestion view owned by the workflow."""
+    view = workflow.ingredient_verification
+    language = workflow.language
+    _draw_text(
+        screen,
+        fonts.subheading,
+        text(language, "ingredient_title"),
+        (400, 34),
+        NUTRIBOX_BLUE,
+    )
+    _draw_text(
+        screen,
+        fonts.small,
+        text(language, "ingredient_prompt"),
+        (400, 62),
+        SECONDARY_TEXT,
+    )
+    thumbnail_rect = (28, 82, 120, 56)
+    pygame.draw.rect(screen, ELEVATED_SURFACE, thumbnail_rect, border_radius=8)
+    pygame.draw.rect(screen, BORDER, thumbnail_rect, width=2, border_radius=8)
+    if thumbnail is not None:
+        size = scaled_image_size(tuple(thumbnail.get_size()), (120, 56))
+        surface = pygame.transform.smoothscale(thumbnail, size)
+        screen.blit(surface, (28 + (120 - size[0]) // 2, 82 + (56 - size[1]) // 2))
+    component = (
+        view.component_names[view.component_index]
+        if 0 <= view.component_index < len(view.component_names)
+        else ""
+    )
+    _draw_text(
+        screen,
+        fonts.small,
+        _ellipsize(
+            fonts.small, f"{text(language, 'ingredient_component')}: {component}", 360
+        ),
+        (350, 112),
+        PRIMARY_TEXT,
+    )
+    _draw_text(
+        screen,
+        fonts.small,
+        f"{view.component_index + 1}/{max(1, len(view.component_names))}",
+        (740, 112),
+        SECONDARY_TEXT,
+    )
+    start = view.page * FOOD_SELECTION_PAGE_SIZE
+    for offset, name in enumerate(view.names[start : start + FOOD_SELECTION_PAGE_SIZE]):
+        included = view.included[start + offset]
+        mark = "[x]" if included else "[ ]"
+        _draw_text(
+            screen,
+            fonts.body,
+            _ellipsize(fonts.body, f"{mark} {name}", 450),
+            (278, 171 + offset * 46),
+            PRIMARY_TEXT,
+        )
+    if view.request_in_progress:
+        _draw_text(
+            screen,
+            fonts.small,
+            text(language, "ingredient_submitting"),
+            (400, 370),
+            SECONDARY_TEXT,
+        )
+    elif view.retry_available:
+        _draw_text(
+            screen,
+            fonts.small,
+            text(language, "ingredient_retry"),
+            (400, 370),
             SECONDARY_TEXT,
         )
 
