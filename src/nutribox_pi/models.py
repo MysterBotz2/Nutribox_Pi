@@ -97,6 +97,7 @@ def _validate_decimal_range(
 class RecognitionSource(StrEnum):
     SIMULATED = "simulated"
     GEMINI = "gemini"
+    SESSION = "session"
 
 
 class PairingStatus(StrEnum):

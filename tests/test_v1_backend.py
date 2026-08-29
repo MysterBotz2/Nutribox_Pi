@@ -1,15 +1,26 @@
 import math
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 import pytest
 import requests
 
-from nutribox_pi.adapters.v1_backend import BackendError, V1BackendClient
+from nutribox_pi.adapters.v1_backend import (
+    BackendError,
+    MalformedBackendResponseError,
+    V1BackendClient,
+)
+from nutribox_pi.continuation import (
+    ContinuationState,
+    MealAnalysisContinuationWorkflow,
+)
 from nutribox_pi.models import (
     AnalysisStatus,
     CalculatedResponse,
     FoodNotRecognizedResponse,
+    MealAnalysisResponse,
+    MealAnalysisSelection,
     NutritionReferenceNotFoundResponse,
     RequiresFoodSelectionResponse,
 )
@@ -269,3 +280,174 @@ def test_nutrition_reference_not_found_accepts_recognized_food_object(
     assert isinstance(result, NutritionReferenceNotFoundResponse)
     assert result.recognized_foods[0].name == "chicken adobo"
     assert result.recognition_source.value == "simulated"
+
+
+_COMPONENT_ID = "123e4567-e89b-12d3-a456-426614174000"
+_CANDIDATE_ID = "123e4567-e89b-12d3-a456-426614174001"
+
+
+def _current_calculated_selection_payload() -> dict[str, object]:
+    """Authoritative response shape from POST .../selections."""
+    nutrition = {
+        "calories": "100.000",
+        "protein_g": "10.000",
+        "carbohydrates_g": "20.000",
+        "fat_g": "3.000",
+        "fiber_g": "2.000",
+        "saturated_fat_g": "1.000",
+        "sugars_g": "4.000",
+        "sodium_mg": "5.000",
+        "cholesterol_mg": "6.000",
+        "omega_3_g": "0.100",
+        "omega_6_g": "0.200",
+        "calcium_mg": "7.000",
+        "potassium_mg": "8.000",
+        "zinc_mg": "9.000",
+        "iron_mg": "10.000",
+        "magnesium_mg": "11.000",
+        "energy_kj": "418.400",
+        "phosphorus_mg": "12.000",
+        "vitamin_b6_mg": "13.000",
+        "niacin_mg": "14.000",
+        "vitamin_a_mcg_rae": "15.000",
+        "vitamin_b12_mcg": "16.000",
+        "vitamin_c_mg": "17.000",
+        "vitamin_d_mcg": "18.000",
+        "folate_mcg_dfe": "19.000",
+    }
+    return {
+        "status": "calculated",
+        "recognized_foods": [{"name": "selected food"}],
+        "recognition_source": "session",
+        "analysis_session_id": 12,
+        "analysis_session_expires_at": "2030-01-02T03:04:05Z",
+        "measured_weight_grams": "250.000",
+        "components": [
+            {
+                "component_id": _COMPONENT_ID,
+                "recognized_name": "selected food",
+                "raw_estimated_proportion": "1.000",
+                "normalized_proportion": "1.000",
+                "estimated_weight_grams": "250.000",
+                "weight_source": "ai_estimate",
+                "resolution_status": "resolved",
+                "nutrition_source": "local_database",
+                "resolved_reference": "food:42",
+                "candidates": [],
+                "nutrition": dict(nutrition),
+                "composite_estimation": False,
+                "suggested_ingredients": [],
+                "recipe_matches": [],
+            }
+        ],
+        "weight_grams": "250.000",
+        "weight_source": "ai_estimate",
+        "food": {"id": 42, "name": "selected food"},
+        "nutrition": nutrition,
+    }
+
+
+def test_selection_calculated_response_parses_current_authoritative_schema() -> None:
+    session = FakeSession(FakeResponse(_current_calculated_selection_payload()))
+    client = V1BackendClient(
+        "https://backend.test", session=session  # type: ignore[arg-type]
+    )
+
+    result = client.select_food_component(
+        12,
+        MealAnalysisSelection(_COMPONENT_ID, _CANDIDATE_ID),
+        "verified-device-token",
+    )
+
+    assert isinstance(result, CalculatedResponse)
+    assert isinstance(result, MealAnalysisResponse)
+    assert result.recognition_source.value == "session"
+    assert result.weight_grams == "250.000"
+    assert result.nutrition.values == _current_calculated_selection_payload()[
+        "nutrition"
+    ]
+    assert result.nutrition.values["energy_kj"] == "418.400"
+    assert result.nutrition.values["phosphorus_mg"] == "12.000"
+    assert result.nutrition.values["vitamin_b6_mg"] == "13.000"
+    assert result.nutrition.values["niacin_mg"] == "14.000"
+    assert result.components is not None
+    assert result.components[0].nutrition is not None
+    assert result.components[0].nutrition.values == result.nutrition.values
+    assert session.calls[0][1].endswith("/api/meals/analysis-sessions/12/selections")
+
+    workflow = MealAnalysisContinuationWorkflow(object())  # type: ignore[arg-type]
+    try:
+        workflow.accept_initial_response(result)
+        assert workflow.state is ContinuationState.CALCULATED
+    finally:
+        workflow.close()
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "energy_kj",
+        "phosphorus_mg",
+        "vitamin_b6_mg",
+        "niacin_mg",
+        "sodium_mg",
+        "vitamin_a_mcg_rae",
+    ],
+)
+def test_calculated_selection_accepts_nullable_expanded_nutrients(field: str) -> None:
+    payload = _current_calculated_selection_payload()
+    payload["nutrition"][field] = None  # type: ignore[index]
+    payload["components"][0]["nutrition"][field] = None  # type: ignore[index]
+
+    result = V1BackendClient._analysis_response(payload)
+
+    assert isinstance(result, CalculatedResponse)
+    assert result.nutrition.values[field] is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda payload: payload["nutrition"].pop("fiber_g"),
+        lambda payload: payload["nutrition"].__setitem__("energy_kj", 418.4),
+        lambda payload: payload["nutrition"].__setitem__("phosphorus_mg", "-1"),
+        lambda payload: payload["nutrition"].__setitem__("vitamin_b6_mg", "NaN"),
+        lambda payload: payload["nutrition"].__setitem__("sodium", "5"),
+        lambda payload: payload.pop("weight_grams"),
+    ],
+)
+def test_calculated_selection_rejects_invalid_or_legacy_nutrition(
+    mutation: Any,
+) -> None:
+    payload = deepcopy(_current_calculated_selection_payload())
+    mutation(payload)
+
+    with pytest.raises(MalformedBackendResponseError) as error:
+        V1BackendClient._analysis_response(payload)
+
+    assert str(error.value) == "backend returned an invalid analysis response"
+    assert "selected food" not in str(error.value)
+    assert "verified-device-token" not in str(error.value)
+
+
+@pytest.mark.parametrize("status", list(AnalysisStatus))
+def test_all_authoritative_analysis_outcomes_parse_for_continuations(
+    status: AnalysisStatus,
+) -> None:
+    payload: dict[str, object]
+    if status is AnalysisStatus.CALCULATED:
+        payload = _current_calculated_selection_payload()
+    else:
+        payload = {
+            "status": status.value,
+            "recognized_foods": [{"name": "selected food"}],
+            "recognition_source": "session",
+            "analysis_session_id": 12,
+            "analysis_session_expires_at": "2030-01-02T03:04:05Z",
+            "measured_weight_grams": "250.000",
+            "components": [],
+        }
+
+    result = V1BackendClient._analysis_response(payload)
+
+    assert result.status is status
