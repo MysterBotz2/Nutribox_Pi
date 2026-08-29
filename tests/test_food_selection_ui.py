@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import ast
 from collections.abc import Callable
 from concurrent.futures import Future
 from pathlib import Path
 
 import pytest
 
+from nutribox_pi.adapters import pygame_device_ui
 from nutribox_pi.adapters.mock_hardware import (
     SimulatedTemperatureSensor,
     SimulatedWeightSensor,
@@ -148,6 +150,61 @@ def test_safe_ordinal_selection_changes_and_submits_once(tmp_path: Path) -> None
     assert all(
         identifier not in repr(flow.food_selection) for identifier in (COMPONENT_ID,)
     )
+
+
+def test_fourth_visible_candidate_maps_only_through_its_safe_ordinal(
+    tmp_path: Path,
+) -> None:
+    flow, backend = workflow(tmp_path, 4)
+    flow.select_food_candidate(3)
+    assert flow.food_selection.selected_index == 3
+    flow.continue_food_selection()
+    assert len(backend.calls) == 1
+    selection = backend.calls[0][1]
+    assert selection.candidate_id.endswith("003")
+    assert "candidate_id" not in repr(flow.food_selection)
+
+
+def test_dispatcher_actions_after_food_selection_references_remain_reachable() -> None:
+    calls: list[str] = []
+
+    class Workflow:
+        screen = UIScreen.FOOD_SELECTION
+
+        def next_food_selection_page(self) -> None:
+            calls.append("next")
+
+        def back(self) -> None:
+            calls.append("back")
+
+        def retake(self) -> None:
+            calls.append("retake")
+
+    workflow = Workflow()
+    pygame_device_ui._apply_action(
+        object(), object(), object(), workflow, UIAction.FOOD_NEXT
+    )
+    pygame_device_ui._apply_action(
+        object(), object(), object(), workflow, UIAction.BACK
+    )
+    pygame_device_ui._apply_action(
+        object(), object(), object(), workflow, UIAction.RETAKE
+    )
+    assert calls == ["next", "back", "retake"]
+
+
+def test_every_static_uiaction_reference_has_an_enum_member() -> None:
+    references: set[str] = set()
+    for source in Path("src/nutribox_pi").rglob("*.py"):
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "UIAction"
+            ):
+                references.add(node.attr)
+    assert references <= set(UIAction.__members__)
 
 
 def test_candidate_pagination_is_bounded_and_preserves_safe_index(

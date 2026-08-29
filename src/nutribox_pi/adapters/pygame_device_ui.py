@@ -20,6 +20,7 @@ from nutribox_pi.device_ui import (
     DISPLAY_ERROR,
     DISPLAY_SIZE,
     ELEVATED_SURFACE,
+    FOOD_SELECTION_PAGE_SIZE,
     PREVIEW_ERROR,
     PRIMARY,
     PRIMARY_MUTED,
@@ -335,6 +336,7 @@ def _apply_action(
         UIAction.SELECT_FOOD_0,
         UIAction.SELECT_FOOD_1,
         UIAction.SELECT_FOOD_2,
+        UIAction.SELECT_FOOD_3,
     }:
         workflow.select_food_candidate(
             (
@@ -800,7 +802,10 @@ def _render_food_selection(
         (400, 78),
         SECONDARY_TEXT,
     )
-    page_count = max(1, (len(view.names) + 2) // 3)
+    page_count = max(
+        1,
+        (len(view.names) + FOOD_SELECTION_PAGE_SIZE - 1) // FOOD_SELECTION_PAGE_SIZE,
+    )
     _draw_text(
         screen,
         fonts.small,

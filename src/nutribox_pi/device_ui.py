@@ -115,6 +115,7 @@ class UIAction(StrEnum):
     SELECT_FOOD_0 = "select_food_0"
     SELECT_FOOD_1 = "select_food_1"
     SELECT_FOOD_2 = "select_food_2"
+    SELECT_FOOD_3 = "select_food_3"
     FOOD_PREVIOUS = "food_previous"
     FOOD_NEXT = "food_next"
     FOOD_CONTINUE = "food_continue"
@@ -136,7 +137,7 @@ class ButtonLayout:
 
 
 EXIT_BUTTON = ButtonLayout(UIAction.EXIT, "Exit", TouchRect(660, 20, 110, 58), "danger")
-FOOD_SELECTION_PAGE_SIZE = 3
+FOOD_SELECTION_PAGE_SIZE = 4
 FOOD_SELECTION_LIMITATION = "Food selection is unavailable for this analysis."
 
 
@@ -288,13 +289,14 @@ def _food_selection_buttons(view: FoodSelectionView) -> tuple[ButtonLayout, ...]
         UIAction.SELECT_FOOD_0,
         UIAction.SELECT_FOOD_1,
         UIAction.SELECT_FOOD_2,
+        UIAction.SELECT_FOOD_3,
     )
     start = view.page * FOOD_SELECTION_PAGE_SIZE
     candidates = tuple(
         ButtonLayout(
             action,
             view.names[start + offset],
-            TouchRect(60, 112 + offset * 54, 680, 50),
+            TouchRect(40, 112 + offset * 56, 500, 50),
             "primary" if view.selected_index == start + offset else "card",
             not view.request_in_progress,
         )
@@ -308,33 +310,33 @@ def _food_selection_buttons(view: FoodSelectionView) -> tuple[ButtonLayout, ...]
         ButtonLayout(
             UIAction.FOOD_PREVIOUS,
             "Previous",
-            TouchRect(60, 290, 150, 56),
+            TouchRect(560, 112, 180, 50),
             "card",
             view.page > 0 and not view.request_in_progress,
         ),
         ButtonLayout(
             UIAction.FOOD_NEXT,
             "Next",
-            TouchRect(230, 290, 150, 56),
+            TouchRect(560, 168, 180, 50),
             "card",
             view.page + 1 < page_count and not view.request_in_progress,
         ),
         ButtonLayout(
             UIAction.FOOD_CONTINUE,
             "Continue",
-            TouchRect(400, 290, 220, 56),
+            TouchRect(560, 224, 180, 50),
             "primary",
             view.selected_index is not None and not view.request_in_progress,
         ),
-        ButtonLayout(UIAction.BACK, "Back", TouchRect(640, 290, 100, 56), "card"),
+        ButtonLayout(UIAction.BACK, "Back", TouchRect(560, 280, 180, 50), "card"),
         ButtonLayout(UIAction.RETAKE, "Retake", TouchRect(170, 362, 220, 56), "card"),
         ButtonLayout(UIAction.HOME, "Home", TouchRect(410, 362, 220, 56), "card"),
         EXIT_BUTTON,
     )
     if view.retry_available:
         return candidates + (
-            ButtonLayout(UIAction.RETRY, "Retry", TouchRect(400, 290, 220, 56)),
-            ButtonLayout(UIAction.BACK, "Back", TouchRect(640, 290, 100, 56), "card"),
+            ButtonLayout(UIAction.RETRY, "Retry", TouchRect(560, 224, 180, 50)),
+            ButtonLayout(UIAction.BACK, "Back", TouchRect(560, 280, 180, 50), "card"),
             ButtonLayout(
                 UIAction.RETAKE, "Retake", TouchRect(170, 362, 220, 56), "card"
             ),
