@@ -15,12 +15,18 @@ from nutribox_pi.device_ui import (
     ANALYSIS_ERROR,
     BACKGROUND,
     BORDER,
+    CALCULATED_HEADER,
+    CALCULATED_LEFT_PANEL,
+    CALCULATED_PAGINATION,
+    CALCULATED_RIGHT_PANEL,
+    CALCULATED_ROWS,
     CARD,
     DANGER,
     DISPLAY_ERROR,
     DISPLAY_SIZE,
     ELEVATED_SURFACE,
     FOOD_SELECTION_PAGE_SIZE,
+    NUTRITION_ROWS_PER_PAGE,
     PREVIEW_ERROR,
     PRIMARY,
     PRIMARY_MUTED,
@@ -31,6 +37,8 @@ from nutribox_pi.device_ui import (
     ButtonLayout,
     FoodSelectionView,
     MealCaptureWorkflow,
+    NutritionTab,
+    NutritionView,
     TemporaryCaptureStore,
     UIAction,
     UIResult,
@@ -243,6 +251,7 @@ def _run_loop(
                     *point,
                     _pairing_state(workflow),
                     _food_selection(workflow),
+                    _nutrition_view(workflow),
                 )
                 if pressed is not None or action is None:
                     continue
@@ -273,6 +282,7 @@ def _run_loop(
                     *point,
                     _pairing_state(workflow),
                     _food_selection(workflow),
+                    _nutrition_view(workflow),
                 )
                 is not active_press.action
             ):
@@ -352,6 +362,16 @@ def _apply_action(
         workflow.next_food_selection_page()
     elif action is UIAction.FOOD_CONTINUE:
         workflow.continue_food_selection()
+    elif action is UIAction.NUTRITION_OVERVIEW:
+        workflow.select_nutrition_tab(NutritionTab.OVERVIEW)
+    elif action is UIAction.NUTRITION_MACROS:
+        workflow.select_nutrition_tab(NutritionTab.MACROS)
+    elif action is UIAction.NUTRITION_MICROS:
+        workflow.select_nutrition_tab(NutritionTab.MICROS)
+    elif action is UIAction.NUTRITION_PREVIOUS:
+        workflow.previous_nutrition_page()
+    elif action is UIAction.NUTRITION_NEXT:
+        workflow.next_nutrition_page()
     elif action is UIAction.BACK:
         workflow.back()
     elif action is UIAction.CAPTURE:
@@ -471,7 +491,10 @@ def _render(
     else:
         _render_error(pygame, screen, fonts, workflow.error_message, workflow.language)
     for button in buttons_for(
-        workflow.screen, _pairing_state(workflow), _food_selection(workflow)
+        workflow.screen,
+        _pairing_state(workflow),
+        _food_selection(workflow),
+        _nutrition_view(workflow),
     ):
         button = _localized_button(button, workflow)
         _draw_button(pygame, screen, fonts.button, button, pressed is button.action)
@@ -486,6 +509,10 @@ def _food_selection(workflow: MealCaptureWorkflow) -> FoodSelectionView | None:
     return (
         workflow.food_selection if workflow.screen is UIScreen.FOOD_SELECTION else None
     )
+
+
+def _nutrition_view(workflow: MealCaptureWorkflow) -> NutritionView | None:
+    return workflow.nutrition_view if workflow.screen is UIScreen.CALCULATED else None
 
 
 def _localized_button(
@@ -503,6 +530,11 @@ def _localized_button(
         UIAction.FOOD_PREVIOUS: "previous",
         UIAction.FOOD_NEXT: "next",
         UIAction.FOOD_CONTINUE: "continue_food",
+        UIAction.NUTRITION_OVERVIEW: "nutrition_overview",
+        UIAction.NUTRITION_MACROS: "nutrition_macros",
+        UIAction.NUTRITION_MICROS: "nutrition_micros",
+        UIAction.NUTRITION_PREVIOUS: "previous",
+        UIAction.NUTRITION_NEXT: "next",
     }
     key = keys.get(button.action)
     if button.action is UIAction.TOGGLE_INTRO:
@@ -909,41 +941,157 @@ def _render_nutrition_contents(
 ) -> None:
     response = workflow.analysis_response
     assert isinstance(response, CalculatedResponse)
-    _draw_text(
-        screen, fonts.subheading, "Nutritional Contents", (235, 48), NUTRIBOX_BLUE
-    )
-    food = response.recognized_foods[0].name if response.recognized_foods else "Meal"
+    language = workflow.language
+    view = workflow.nutrition_view
+    _draw_card(pygame, screen, CALCULATED_HEADER.as_tuple())
+    _draw_card(pygame, screen, CALCULATED_LEFT_PANEL.as_tuple())
+    _draw_card(pygame, screen, CALCULATED_RIGHT_PANEL.as_tuple())
     _draw_text(
         screen,
-        fonts.small,
-        _ellipsize(fonts.small, food, 400),
-        (215, 78),
-        SECONDARY_TEXT,
+        fonts.subheading,
+        text(language, "nutrition_title"),
+        (400, 40),
+        NUTRIBOX_BLUE,
     )
-    nutrition = response.nutrition
-    values = nutrition.values
-    tiles = (
-        ("Energy", nutrition.calories, CALORIE),
-        ("Protein", nutrition.protein, PROTEIN),
-        ("Carbohydrates", nutrition.carbohydrates, CARBOHYDRATES),
-        ("Total fat", nutrition.fat, FAT),
-        ("Fiber", nutrition.fiber, FIBER),
-        ("Saturated fat", values.get("saturated_fat"), FAT),
-        ("Sugars", values.get("sugars"), SUGAR),
-        ("Sodium", values.get("sodium"), PROTEIN),
-    )
-    for index, (label, value, color) in enumerate(tiles):
-        x = 28 + (index % 4) * 190
-        y = 108 + (index // 4) * 118
-        _draw_nutrient_tile(pygame, screen, fonts, (x, y, 170, 96), label, value, color)
-    if workflow.simulated_weight:
+    _render_meal_summary(screen, fonts, response, language)
+    rows = _nutrition_rows(response, view.tab, language)
+    start = view.page * NUTRITION_ROWS_PER_PAGE
+    for index, (label, value, unit, color) in enumerate(
+        rows[start : start + NUTRITION_ROWS_PER_PAGE]
+    ):
+        y = CALCULATED_ROWS.y + index * 30
+        pygame.draw.rect(
+            screen,
+            ELEVATED_SURFACE,
+            (CALCULATED_ROWS.x, y, CALCULATED_ROWS.width, 26),
+            border_radius=8,
+        )
         _draw_text(
             screen,
             fonts.small,
-            "Development mode: simulated weight",
-            (280, 365),
+            _ellipsize(fonts.small, label, 245),
+            (CALCULATED_ROWS.x + 130, y + 13),
+            PRIMARY_TEXT,
+        )
+        _draw_text(
+            screen,
+            fonts.small,
+            _ellipsize(fonts.small, _format_nutrition(value, unit, language), 185),
+            (CALCULATED_ROWS.x + 365, y + 13),
+            color,
+        )
+    _draw_text(
+        screen,
+        fonts.small,
+        f"{view.page + 1} / {view.page_count}",
+        (CALCULATED_PAGINATION.x + CALCULATED_PAGINATION.width // 2, 328),
+        SECONDARY_TEXT,
+    )
+
+
+def _render_meal_summary(
+    screen: Any, fonts: _Fonts, response: CalculatedResponse, language: Language
+) -> None:
+    food = response.recognized_foods[0].name if response.recognized_foods else "Meal"
+    x = CALCULATED_LEFT_PANEL.x + CALCULATED_LEFT_PANEL.width // 2
+    _draw_text(
+        screen, fonts.body, text(language, "meal_summary"), (x, 116), NUTRIBOX_BLUE
+    )
+    _draw_text(
+        screen,
+        fonts.small,
+        _ellipsize(fonts.small, food, 210),
+        (x, 154),
+        PRIMARY_TEXT,
+    )
+    _draw_text(
+        screen,
+        fonts.small,
+        text(language, "analyzed_weight"),
+        (x, 198),
+        SECONDARY_TEXT,
+    )
+    _draw_text(
+        screen,
+        fonts.body,
+        _format_nutrition(response.weight_grams, "g", language),
+        (x, 228),
+        PRIMARY_TEXT,
+    )
+    if response.recognition_source.value == "simulated":
+        _draw_text(
+            screen,
+            fonts.small,
+            text(language, "simulated_recognition"),
+            (x, 270),
             SECONDARY_TEXT,
         )
+
+
+def _nutrition_rows(
+    response: CalculatedResponse, tab: NutritionTab, language: Language
+) -> tuple[tuple[str, str | None, str, tuple[int, int, int]], ...]:
+    values = response.nutrition.values
+    if tab is NutritionTab.OVERVIEW:
+        return (
+            (
+                text(language, "nutrition_result"),
+                text(language, "nutrition_complete"),
+                "",
+                PRIMARY,
+            ),
+            (
+                text(language, "nutrition_calories"),
+                response.nutrition.calories,
+                "kcal",
+                CALORIE,
+            ),
+            (text(language, "analyzed_weight"), response.weight_grams, "g", PRIMARY),
+        )
+    macro_specs = (
+        ("energy_kj", "nutrition_energy", "kJ", CALORIE),
+        ("calories", "nutrition_calories", "kcal", CALORIE),
+        ("protein_g", "nutrition_protein", "g", PROTEIN),
+        ("carbohydrates_g", "nutrition_carbohydrates", "g", CARBOHYDRATES),
+        ("fat_g", "nutrition_total_fat", "g", FAT),
+        ("saturated_fat_g", "nutrition_saturated_fat", "g", FAT),
+        ("fiber_g", "nutrition_fiber", "g", FIBER),
+        ("sugars_g", "nutrition_sugar", "g", SUGAR),
+    )
+    micro_specs = (
+        ("sodium_mg", "nutrition_sodium", "mg"),
+        ("cholesterol_mg", "nutrition_cholesterol", "mg"),
+        ("omega_3_g", "nutrition_omega_3", "g"),
+        ("omega_6_g", "nutrition_omega_6", "g"),
+        ("calcium_mg", "nutrition_calcium", "mg"),
+        ("iron_mg", "nutrition_iron", "mg"),
+        ("potassium_mg", "nutrition_potassium", "mg"),
+        ("magnesium_mg", "nutrition_magnesium", "mg"),
+        ("zinc_mg", "nutrition_zinc", "mg"),
+        ("phosphorus_mg", "nutrition_phosphorus", "mg"),
+        ("vitamin_a_mcg_rae", "nutrition_vitamin_a", "mcg RAE"),
+        ("vitamin_b6_mg", "nutrition_vitamin_b6", "mg"),
+        ("vitamin_c_mg", "nutrition_vitamin_c", "mg"),
+        ("vitamin_b12_mcg", "nutrition_vitamin_b12", "mcg"),
+        ("folate_mcg_dfe", "nutrition_folate", "mcg DFE"),
+        ("vitamin_d_mcg", "nutrition_vitamin_d", "mcg"),
+        ("niacin_mg", "nutrition_niacin", "mg"),
+    )
+    if tab is NutritionTab.MACROS:
+        return tuple(
+            (text(language, label), values.get(key), unit, color)
+            for key, label, unit, color in macro_specs
+        )
+    return tuple(
+        (text(language, label), values.get(key), unit, PRIMARY)
+        for key, label, unit in micro_specs
+    )
+
+
+def _format_nutrition(value: str | None, unit: str, language: Language) -> str:
+    if value is None:
+        return text(language, "not_available")
+    return f"{value} {unit}".rstrip()
 
 
 def _draw_nutrient_tile(

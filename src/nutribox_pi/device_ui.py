@@ -119,6 +119,11 @@ class UIAction(StrEnum):
     FOOD_PREVIOUS = "food_previous"
     FOOD_NEXT = "food_next"
     FOOD_CONTINUE = "food_continue"
+    NUTRITION_OVERVIEW = "nutrition_overview"
+    NUTRITION_MACROS = "nutrition_macros"
+    NUTRITION_MICROS = "nutrition_micros"
+    NUTRITION_PREVIOUS = "nutrition_previous"
+    NUTRITION_NEXT = "nutrition_next"
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +145,49 @@ EXIT_BUTTON = ButtonLayout(UIAction.EXIT, "Exit", TouchRect(660, 20, 110, 58), "
 FOOD_SELECTION_PAGE_SIZE = 4
 FOOD_SELECTION_LIMITATION = "Food selection is unavailable for this analysis."
 
+# Calculated-result geometry is intentionally centralized: 800x480 is a hard
+# device viewport, with mutually exclusive header, content, and action regions.
+CALCULATED_HEADER = TouchRect(20, 16, 760, 48)
+CALCULATED_LEFT_PANEL = TouchRect(20, 80, 250, 300)
+CALCULATED_RIGHT_PANEL = TouchRect(284, 80, 496, 300)
+CALCULATED_TAB_RECTS = (
+    TouchRect(296, 94, 144, 44),
+    TouchRect(448, 94, 144, 44),
+    TouchRect(600, 94, 164, 44),
+)
+CALCULATED_ROWS = TouchRect(300, 154, 464, 120)
+CALCULATED_PAGINATION = TouchRect(300, 306, 464, 44)
+CALCULATED_ACTIONS = TouchRect(20, 400, 760, 60)
+NUTRITION_ROW_HEIGHT = 30
+NUTRITION_ROWS_PER_PAGE = CALCULATED_ROWS.height // NUTRITION_ROW_HEIGHT
+
+
+class NutritionTab(StrEnum):
+    OVERVIEW = "overview"
+    MACROS = "macros"
+    MICROS = "micros"
+
+
+NUTRITION_ROW_COUNTS = {
+    NutritionTab.OVERVIEW: 3,
+    NutritionTab.MACROS: 8,
+    NutritionTab.MICROS: 17,
+}
+NUTRITION_PAGE_COUNTS = {
+    tab: (row_count + NUTRITION_ROWS_PER_PAGE - 1) // NUTRITION_ROWS_PER_PAGE
+    for tab, row_count in NUTRITION_ROW_COUNTS.items()
+}
+
+
+@dataclass(frozen=True, slots=True)
+class NutritionView:
+    tab: NutritionTab = NutritionTab.OVERVIEW
+    page: int = 0
+
+    @property
+    def page_count(self) -> int:
+        return NUTRITION_PAGE_COUNTS[self.tab]
+
 
 @dataclass(frozen=True, slots=True)
 class FoodSelectionView:
@@ -156,6 +204,7 @@ def buttons_for(
     screen: UIScreen,
     pairing_state: PairingState | None = None,
     food_selection: FoodSelectionView | None = None,
+    nutrition_view: NutritionView | None = None,
 ) -> tuple[ButtonLayout, ...]:
     if screen is UIScreen.LOADING:
         return ()
@@ -227,18 +276,7 @@ def buttons_for(
             EXIT_BUTTON,
         )
     if screen is UIScreen.CALCULATED:
-        return (
-            ButtonLayout(
-                UIAction.RETAKE, "Retake", TouchRect(70, 330, 300, 76), "card"
-            ),
-            ButtonLayout(UIAction.HOME, "Home", TouchRect(430, 330, 300, 76)),
-            ButtonLayout(
-                UIAction.SHOW_RECOGNIZED_FOODS,
-                "See recognized foods",
-                TouchRect(430, 240, 300, 64),
-            ),
-            EXIT_BUTTON,
-        )
+        return _calculated_buttons(nutrition_view or NutritionView())
     if screen is UIScreen.FOOD_SELECTION:
         return _food_selection_buttons(
             food_selection or FoodSelectionView((), 0, None, False, False)
@@ -346,6 +384,54 @@ def _food_selection_buttons(view: FoodSelectionView) -> tuple[ButtonLayout, ...]
     return candidates + navigation
 
 
+def _calculated_buttons(view: NutritionView) -> tuple[ButtonLayout, ...]:
+    tab_actions = (
+        UIAction.NUTRITION_OVERVIEW,
+        UIAction.NUTRITION_MACROS,
+        UIAction.NUTRITION_MICROS,
+    )
+    tab_labels = ("Overview", "Macros", "Micros")
+    tabs = tuple(
+        ButtonLayout(
+            action,
+            label,
+            rectangle,
+            (
+                "primary"
+                if view.tab.value == action.removeprefix("nutrition_")
+                else "card"
+            ),
+        )
+        for action, label, rectangle in zip(
+            tab_actions, tab_labels, CALCULATED_TAB_RECTS, strict=True
+        )
+    )
+    return tabs + (
+        ButtonLayout(
+            UIAction.NUTRITION_PREVIOUS,
+            "Previous",
+            TouchRect(300, 306, 128, 44),
+            "card",
+            view.page > 0,
+        ),
+        ButtonLayout(
+            UIAction.NUTRITION_NEXT,
+            "Next",
+            TouchRect(636, 306, 128, 44),
+            "card",
+            view.page + 1 < view.page_count,
+        ),
+        ButtonLayout(
+            UIAction.SHOW_RECOGNIZED_FOODS,
+            "See recognized foods",
+            TouchRect(20, 400, 230, 60),
+        ),
+        ButtonLayout(UIAction.RETAKE, "Retake", TouchRect(260, 400, 160, 60), "card"),
+        ButtonLayout(UIAction.HOME, "Home", TouchRect(430, 400, 160, 60)),
+        ButtonLayout(UIAction.EXIT, "Exit", TouchRect(600, 400, 180, 60), "danger"),
+    )
+
+
 def _home_pairing_button(pairing_state: PairingState | None) -> ButtonLayout:
     if pairing_state is PairingState.PAIRED:
         return ButtonLayout(
@@ -374,8 +460,9 @@ def action_at(
     y: float,
     pairing_state: PairingState | None = None,
     food_selection: FoodSelectionView | None = None,
+    nutrition_view: NutritionView | None = None,
 ) -> UIAction | None:
-    for button in buttons_for(screen, pairing_state, food_selection):
+    for button in buttons_for(screen, pairing_state, food_selection, nutrition_view):
         if button.enabled and button.rectangle.contains(x, y):
             return button.action
     return None
@@ -481,6 +568,7 @@ class MealCaptureWorkflow:
         self.captured_weight_grams: float | None = None
         self.analysis_retry_available = False
         self._food_selection = FoodSelectionView((), 0, None, False, False)
+        self._nutrition_view = NutritionView()
 
     @property
     def language(self) -> Language:
@@ -565,6 +653,24 @@ class MealCaptureWorkflow:
     @property
     def food_selection(self) -> FoodSelectionView:
         return self._food_selection
+
+    @property
+    def nutrition_view(self) -> NutritionView:
+        return self._nutrition_view
+
+    def select_nutrition_tab(self, tab: NutritionTab) -> None:
+        if self.screen is UIScreen.CALCULATED:
+            self._nutrition_view = NutritionView(tab)
+
+    def previous_nutrition_page(self) -> None:
+        view = self._nutrition_view
+        if self.screen is UIScreen.CALCULATED and view.page > 0:
+            self._nutrition_view = NutritionView(view.tab, view.page - 1)
+
+    def next_nutrition_page(self) -> None:
+        view = self._nutrition_view
+        if self.screen is UIScreen.CALCULATED and view.page + 1 < view.page_count:
+            self._nutrition_view = NutritionView(view.tab, view.page + 1)
 
     def select_food_candidate(self, visible_slot: int) -> None:
         view = self._food_selection
@@ -854,6 +960,7 @@ class MealCaptureWorkflow:
         self.analysis_response = None
         self.captured_weight_grams = None
         self.analysis_retry_available = False
+        self._nutrition_view = NutritionView()
 
     def _show_analysis_response(self, response: MealAnalysisResponse) -> None:
         self.screen = STATUS_SCREENS[response.status]
