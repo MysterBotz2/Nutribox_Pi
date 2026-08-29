@@ -795,7 +795,9 @@ def test_stale_analysis_pointer_events_cannot_activate_result_home(
     result = pygame_device_ui._run_loop(pygame, object(), object(), workflow)
 
     assert result == UIResult(True, "Nutri-Box UI closed.")
-    assert workflow.screen is UIScreen.REQUIRES_FOOD_SELECTION
+    # An anonymous response without backend-issued continuation identifiers is
+    # intentionally limited rather than exposing a non-actionable selection.
+    assert workflow.screen is UIScreen.ERROR
     assert workflow.recognized_foods == (RecognizedFood("chicken adobo"),)
     assert len(backend.calls) == 1
     assert cleared == [[5, 6, 7, 8]]

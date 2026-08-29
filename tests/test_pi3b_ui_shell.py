@@ -11,6 +11,7 @@ from nutribox_pi.adapters import pygame_device_ui
 from nutribox_pi.adapters.pygame_device_ui import display_flags_for
 from nutribox_pi.device_ui import (
     DISPLAY_SIZE,
+    FoodSelectionView,
     MealCaptureWorkflow,
     UIAction,
     UIScreen,
@@ -193,5 +194,41 @@ def test_sdl_dummy_renders_new_screens_inside_canvas(tmp_path: Path) -> None:
             bounds = surface.get_bounding_rect(min_alpha=1)
             assert bounds.left >= 0 and bounds.top >= 0
             assert bounds.right <= 800 and bounds.bottom <= 480
+    finally:
+        pygame.quit()
+
+
+@pytest.mark.parametrize("language", [Language.ENGLISH, Language.TAGALOG])
+def test_sdl_dummy_food_selection_is_contained_and_localized(
+    language: Language,
+) -> None:
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    pygame = pytest.importorskip("pygame")
+    pygame.init()
+    try:
+        surface = pygame.display.set_mode(DISPLAY_SIZE)
+        fonts = pygame_device_ui._Fonts(
+            heading=pygame.font.Font(None, 48),
+            subheading=pygame.font.Font(None, 34),
+            body=pygame.font.Font(None, 28),
+            small=pygame.font.Font(None, 20),
+            button=pygame.font.Font(None, 32),
+        )
+        workflow = SimpleNamespace(
+            screen=UIScreen.FOOD_SELECTION,
+            food_selection=FoodSelectionView(
+                ("A very long backend food candidate name " * 3,) * 3,
+                0,
+                1,
+                False,
+                False,
+            ),
+            language=language,
+            pairing=None,
+        )
+        pygame_device_ui._render(pygame, surface, fonts, workflow, None)
+        bounds = surface.get_bounding_rect(min_alpha=1)
+        assert bounds.left >= 0 and bounds.top >= 0
+        assert bounds.right <= 800 and bounds.bottom <= 480
     finally:
         pygame.quit()

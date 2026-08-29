@@ -28,6 +28,7 @@ from nutribox_pi.device_ui import (
     SECONDARY_TEXT,
     UI_CLOSED,
     ButtonLayout,
+    FoodSelectionView,
     MealCaptureWorkflow,
     TemporaryCaptureStore,
     UIAction,
@@ -209,6 +210,7 @@ def _run_loop(
     while True:
         workflow.tick_startup()
         workflow.tick_pairing()
+        workflow.tick_continuation()
         if workflow.screen is UIScreen.CAPTURE:
             now = time.monotonic()
             if now >= next_preview_at:
@@ -235,7 +237,12 @@ def _run_loop(
             pointer = _pointer_event(pygame, event, down=True)
             if pointer is not None:
                 source, point = pointer
-                action = action_at(workflow.screen, *point, _pairing_state(workflow))
+                action = action_at(
+                    workflow.screen,
+                    *point,
+                    _pairing_state(workflow),
+                    _food_selection(workflow),
+                )
                 if pressed is not None or action is None:
                     continue
                 pressed = _PointerPress(source, workflow.screen, action)
@@ -260,7 +267,12 @@ def _run_loop(
             if workflow.screen is not active_press.screen:
                 continue
             if (
-                action_at(active_press.screen, *point, _pairing_state(workflow))
+                action_at(
+                    active_press.screen,
+                    *point,
+                    _pairing_state(workflow),
+                    _food_selection(workflow),
+                )
                 is not active_press.action
             ):
                 pressed = None
@@ -319,6 +331,25 @@ def _apply_action(
         workflow.start_pairing()
     elif action is UIAction.CANCEL_PAIRING:
         workflow.cancel_pairing()
+    elif action in {
+        UIAction.SELECT_FOOD_0,
+        UIAction.SELECT_FOOD_1,
+        UIAction.SELECT_FOOD_2,
+    }:
+        workflow.select_food_candidate(
+            (
+                UIAction.SELECT_FOOD_0,
+                UIAction.SELECT_FOOD_1,
+                UIAction.SELECT_FOOD_2,
+                UIAction.SELECT_FOOD_3,
+            ).index(action)
+        )
+    elif action is UIAction.FOOD_PREVIOUS:
+        workflow.previous_food_selection_page()
+    elif action is UIAction.FOOD_NEXT:
+        workflow.next_food_selection_page()
+    elif action is UIAction.FOOD_CONTINUE:
+        workflow.continue_food_selection()
     elif action is UIAction.BACK:
         workflow.back()
     elif action is UIAction.CAPTURE:
@@ -346,7 +377,9 @@ def _apply_action(
             image_cache.clear()
         workflow.retake()
     elif action is UIAction.RETRY:
-        if workflow.screen in {UIScreen.PAIR_EXPIRED, UIScreen.PAIR_ERROR}:
+        if workflow.screen is UIScreen.FOOD_SELECTION:
+            workflow.retry_food_selection()
+        elif workflow.screen in {UIScreen.PAIR_EXPIRED, UIScreen.PAIR_ERROR}:
             workflow.start_pairing()
         else:
             workflow.retry()
@@ -419,6 +452,8 @@ def _render(
         _render_review(pygame, screen, fonts, workflow, cache)
     elif workflow.screen is UIScreen.ANALYZING:
         _render_analyzing(pygame, screen, fonts, workflow)
+    elif workflow.screen is UIScreen.FOOD_SELECTION:
+        _render_food_selection(pygame, screen, fonts, workflow)
     elif workflow.screen in RESULT_SCREENS:
         _render_result(pygame, screen, fonts, workflow, cache.thumbnail)
     elif workflow.screen is UIScreen.RECOGNIZED_FOODS:
@@ -433,7 +468,9 @@ def _render(
         _render_pairing(pygame, screen, fonts, workflow)
     else:
         _render_error(pygame, screen, fonts, workflow.error_message, workflow.language)
-    for button in buttons_for(workflow.screen, _pairing_state(workflow)):
+    for button in buttons_for(
+        workflow.screen, _pairing_state(workflow), _food_selection(workflow)
+    ):
         button = _localized_button(button, workflow)
         _draw_button(pygame, screen, fonts.button, button, pressed is button.action)
     pygame.display.flip()
@@ -441,6 +478,12 @@ def _render(
 
 def _pairing_state(workflow: MealCaptureWorkflow) -> Any:
     return workflow.pairing.state if workflow.pairing is not None else None
+
+
+def _food_selection(workflow: MealCaptureWorkflow) -> FoodSelectionView | None:
+    return (
+        workflow.food_selection if workflow.screen is UIScreen.FOOD_SELECTION else None
+    )
 
 
 def _localized_button(
@@ -455,6 +498,9 @@ def _localized_button(
         UIAction.CONTINUE: "skip",
         UIAction.SELECT_ENGLISH: "english",
         UIAction.SELECT_TAGALOG: "tagalog",
+        UIAction.FOOD_PREVIOUS: "previous",
+        UIAction.FOOD_NEXT: "next",
+        UIAction.FOOD_CONTINUE: "continue_food",
     }
     key = keys.get(button.action)
     if button.action is UIAction.TOGGLE_INTRO:
@@ -731,6 +777,51 @@ def _render_analyzing(
             fonts.small,
             "Development mode: simulated weight",
             (400, 335),
+            SECONDARY_TEXT,
+        )
+
+
+def _render_food_selection(
+    pygame: Any, screen: Any, fonts: _Fonts, workflow: MealCaptureWorkflow
+) -> None:
+    """Render only safe names and ordinal selection state from the workflow."""
+    view = workflow.food_selection
+    _draw_text(
+        screen,
+        fonts.subheading,
+        text(workflow.language, "food_selection_title"),
+        (400, 48),
+        NUTRIBOX_BLUE,
+    )
+    _draw_text(
+        screen,
+        fonts.small,
+        text(workflow.language, "food_selection_prompt"),
+        (400, 78),
+        SECONDARY_TEXT,
+    )
+    page_count = max(1, (len(view.names) + 2) // 3)
+    _draw_text(
+        screen,
+        fonts.small,
+        f"{view.page + 1}/{page_count}",
+        (740, 78),
+        SECONDARY_TEXT,
+    )
+    if view.request_in_progress:
+        _draw_text(
+            screen,
+            fonts.small,
+            text(workflow.language, "food_selection_submitting"),
+            (400, 338),
+            SECONDARY_TEXT,
+        )
+    elif view.retry_available:
+        _draw_text(
+            screen,
+            fonts.small,
+            text(workflow.language, "food_selection_retry"),
+            (400, 338),
             SECONDARY_TEXT,
         )
 

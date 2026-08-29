@@ -83,6 +83,13 @@ STRINGS = {
         "retry": "Retry",
         "camera_error": "Camera preview is unavailable.",
         "network_error": "Meal analysis is unavailable. Try again when ready.",
+        "food_selection_title": "Choose your food",
+        "food_selection_prompt": "Select one food to continue.",
+        "food_selection_submitting": "Submitting selection...",
+        "food_selection_retry": "Selection was not sent. Retry when ready.",
+        "previous": "Previous",
+        "next": "Next",
+        "continue_food": "Continue",
     },
     Language.TAGALOG: {
         "choose_language": "Pumili ng wika",
@@ -112,6 +119,13 @@ STRINGS = {
         "retry": "Subukan muli",
         "camera_error": "Hindi available ang preview ng camera.",
         "network_error": "Hindi available ang pagsusuri. Subukan muli.",
+        "food_selection_title": "Piliin ang pagkain",
+        "food_selection_prompt": "Pumili ng isang pagkain upang magpatuloy.",
+        "food_selection_submitting": "Ipinapadala ang pinili...",
+        "food_selection_retry": "Hindi naipadala ang pinili. Subukan muli.",
+        "previous": "Nakaraan",
+        "next": "Susunod",
+        "continue_food": "Magpatuloy",
     },
 }
 

@@ -21,6 +21,7 @@ from nutribox_pi.models import (
     AnalysisStatus,
     IngredientCandidateSelection,
     IngredientVerification,
+    MealAnalysisCandidate,
     MealAnalysisComponent,
     MealAnalysisResponse,
     MealAnalysisSelection,
@@ -109,6 +110,24 @@ class MealAnalysisContinuationWorkflow:
     def retry_available(self) -> bool:
         return (
             self._state is ContinuationState.RETRYABLE_ERROR and self._retry is not None
+        )
+
+    @property
+    def food_candidate_names(self) -> tuple[str, ...]:
+        """Safe presentation names for the current food-selection response."""
+        return tuple(candidate.name for _, candidate in self._food_candidates())
+
+    def select_food_candidate(self, index: int) -> bool:
+        """Resolve a renderer-provided ordinal without exposing backend IDs."""
+        if isinstance(index, bool) or not isinstance(index, int):
+            raise ContinuationError("meal analysis selection is unavailable")
+        choices = self._food_candidates()
+        if not 0 <= index < len(choices):
+            raise ContinuationError("meal analysis selection is unavailable")
+        component, candidate = choices[index]
+        assert candidate.candidate_id is not None
+        return self.select_food_component(
+            MealAnalysisSelection(component.component_id, candidate.candidate_id)
         )
 
     def accept_initial_response(self, response: MealAnalysisResponse) -> None:
@@ -304,6 +323,24 @@ class MealAnalysisContinuationWorkflow:
         if component is None:
             raise ContinuationError("meal analysis component is unavailable")
         return component
+
+    def _food_candidates(
+        self,
+    ) -> tuple[tuple[MealAnalysisComponent, MealAnalysisCandidate], ...]:
+        response = self._response
+        if (
+            self._state is not ContinuationState.REQUIRES_FOOD_SELECTION
+            or response is None
+            or response.analysis_session_id is None
+            or response.components is None
+        ):
+            return ()
+        return tuple(
+            (component, candidate)
+            for component in response.components
+            for candidate in component.candidates
+            if candidate.candidate_id is not None
+        )
 
     def _require_state(self, state: ContinuationState) -> None:
         if self._state is not state:

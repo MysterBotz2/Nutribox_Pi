@@ -9,7 +9,10 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
-from nutribox_pi.continuation import MealAnalysisContinuationWorkflow
+from nutribox_pi.continuation import (
+    ContinuationState,
+    MealAnalysisContinuationWorkflow,
+)
 from nutribox_pi.controller import NutriBoxController
 from nutribox_pi.models import (
     AnalysisStatus,
@@ -78,6 +81,9 @@ class UIScreen(StrEnum):
     CALCULATED = "calculated"
     FOOD_NOT_RECOGNIZED = "food_not_recognized"
     REQUIRES_FOOD_SELECTION = "requires_food_selection"
+    FOOD_SELECTION = "food_selection"
+    REQUIRES_INGREDIENT_VERIFICATION = "requires_ingredient_verification"
+    REQUIRES_RECIPE_CONFIRMATION = "requires_recipe_confirmation"
     NUTRITION_REFERENCE_NOT_FOUND = "nutrition_reference_not_found"
     RECOGNIZED_FOODS = "recognized_foods"
     ERROR = "error"
@@ -106,6 +112,12 @@ class UIAction(StrEnum):
     EXIT = "exit"
     PAIR_DEVICE = "pair_device"
     CANCEL_PAIRING = "cancel_pairing"
+    SELECT_FOOD_0 = "select_food_0"
+    SELECT_FOOD_1 = "select_food_1"
+    SELECT_FOOD_2 = "select_food_2"
+    FOOD_PREVIOUS = "food_previous"
+    FOOD_NEXT = "food_next"
+    FOOD_CONTINUE = "food_continue"
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,10 +136,25 @@ class ButtonLayout:
 
 
 EXIT_BUTTON = ButtonLayout(UIAction.EXIT, "Exit", TouchRect(660, 20, 110, 58), "danger")
+FOOD_SELECTION_PAGE_SIZE = 3
+FOOD_SELECTION_LIMITATION = "Food selection is unavailable for this analysis."
+
+
+@dataclass(frozen=True, slots=True)
+class FoodSelectionView:
+    """Renderer-safe candidate projection; it contains no backend identifiers."""
+
+    names: tuple[str, ...]
+    page: int
+    selected_index: int | None
+    request_in_progress: bool
+    retry_available: bool
 
 
 def buttons_for(
-    screen: UIScreen, pairing_state: PairingState | None = None
+    screen: UIScreen,
+    pairing_state: PairingState | None = None,
+    food_selection: FoodSelectionView | None = None,
 ) -> tuple[ButtonLayout, ...]:
     if screen is UIScreen.LOADING:
         return ()
@@ -211,6 +238,10 @@ def buttons_for(
             ),
             EXIT_BUTTON,
         )
+    if screen is UIScreen.FOOD_SELECTION:
+        return _food_selection_buttons(
+            food_selection or FoodSelectionView((), 0, None, False, False)
+        )
     if screen in RESULT_SCREENS:
         return (
             ButtonLayout(
@@ -252,6 +283,67 @@ def buttons_for(
     )
 
 
+def _food_selection_buttons(view: FoodSelectionView) -> tuple[ButtonLayout, ...]:
+    actions = (
+        UIAction.SELECT_FOOD_0,
+        UIAction.SELECT_FOOD_1,
+        UIAction.SELECT_FOOD_2,
+    )
+    start = view.page * FOOD_SELECTION_PAGE_SIZE
+    candidates = tuple(
+        ButtonLayout(
+            action,
+            view.names[start + offset],
+            TouchRect(60, 112 + offset * 54, 680, 50),
+            "primary" if view.selected_index == start + offset else "card",
+            not view.request_in_progress,
+        )
+        for offset, action in enumerate(actions)
+        if start + offset < len(view.names)
+    )
+    page_count = max(
+        1, (len(view.names) + FOOD_SELECTION_PAGE_SIZE - 1) // FOOD_SELECTION_PAGE_SIZE
+    )
+    navigation = (
+        ButtonLayout(
+            UIAction.FOOD_PREVIOUS,
+            "Previous",
+            TouchRect(60, 290, 150, 56),
+            "card",
+            view.page > 0 and not view.request_in_progress,
+        ),
+        ButtonLayout(
+            UIAction.FOOD_NEXT,
+            "Next",
+            TouchRect(230, 290, 150, 56),
+            "card",
+            view.page + 1 < page_count and not view.request_in_progress,
+        ),
+        ButtonLayout(
+            UIAction.FOOD_CONTINUE,
+            "Continue",
+            TouchRect(400, 290, 220, 56),
+            "primary",
+            view.selected_index is not None and not view.request_in_progress,
+        ),
+        ButtonLayout(UIAction.BACK, "Back", TouchRect(640, 290, 100, 56), "card"),
+        ButtonLayout(UIAction.RETAKE, "Retake", TouchRect(170, 362, 220, 56), "card"),
+        ButtonLayout(UIAction.HOME, "Home", TouchRect(410, 362, 220, 56), "card"),
+        EXIT_BUTTON,
+    )
+    if view.retry_available:
+        return candidates + (
+            ButtonLayout(UIAction.RETRY, "Retry", TouchRect(400, 290, 220, 56)),
+            ButtonLayout(UIAction.BACK, "Back", TouchRect(640, 290, 100, 56), "card"),
+            ButtonLayout(
+                UIAction.RETAKE, "Retake", TouchRect(170, 362, 220, 56), "card"
+            ),
+            ButtonLayout(UIAction.HOME, "Home", TouchRect(410, 362, 220, 56), "card"),
+            EXIT_BUTTON,
+        )
+    return candidates + navigation
+
+
 def _home_pairing_button(pairing_state: PairingState | None) -> ButtonLayout:
     if pairing_state is PairingState.PAIRED:
         return ButtonLayout(
@@ -275,9 +367,13 @@ def _home_pairing_button(pairing_state: PairingState | None) -> ButtonLayout:
 
 
 def action_at(
-    screen: UIScreen, x: float, y: float, pairing_state: PairingState | None = None
+    screen: UIScreen,
+    x: float,
+    y: float,
+    pairing_state: PairingState | None = None,
+    food_selection: FoodSelectionView | None = None,
 ) -> UIAction | None:
-    for button in buttons_for(screen, pairing_state):
+    for button in buttons_for(screen, pairing_state, food_selection):
         if button.enabled and button.rectangle.contains(x, y):
             return button.action
     return None
@@ -340,16 +436,14 @@ class TemporaryCaptureStore:
 STATUS_SCREENS = {
     AnalysisStatus.CALCULATED: UIScreen.CALCULATED,
     AnalysisStatus.FOOD_NOT_RECOGNIZED: UIScreen.FOOD_NOT_RECOGNIZED,
-    AnalysisStatus.REQUIRES_FOOD_SELECTION: UIScreen.REQUIRES_FOOD_SELECTION,
+    AnalysisStatus.REQUIRES_FOOD_SELECTION: UIScreen.FOOD_SELECTION,
     AnalysisStatus.NUTRITION_REFERENCE_NOT_FOUND: (
         UIScreen.NUTRITION_REFERENCE_NOT_FOUND
     ),
     AnalysisStatus.REQUIRES_INGREDIENT_VERIFICATION: (
-        UIScreen.NUTRITION_REFERENCE_NOT_FOUND
+        UIScreen.REQUIRES_INGREDIENT_VERIFICATION
     ),
-    AnalysisStatus.REQUIRES_RECIPE_CONFIRMATION: (
-        UIScreen.NUTRITION_REFERENCE_NOT_FOUND
-    ),
+    AnalysisStatus.REQUIRES_RECIPE_CONFIRMATION: UIScreen.REQUIRES_RECIPE_CONFIRMATION,
 }
 RESULT_SCREENS = frozenset(STATUS_SCREENS.values())
 
@@ -384,6 +478,7 @@ class MealCaptureWorkflow:
         self.analysis_response: MealAnalysisResponse | None = None
         self.captured_weight_grams: float | None = None
         self.analysis_retry_available = False
+        self._food_selection = FoodSelectionView((), 0, None, False, False)
 
     @property
     def language(self) -> Language:
@@ -464,6 +559,78 @@ class MealCaptureWorkflow:
     @property
     def review_image(self) -> Path | None:
         return self._store.image_path if self.screen is UIScreen.REVIEW else None
+
+    @property
+    def food_selection(self) -> FoodSelectionView:
+        return self._food_selection
+
+    def select_food_candidate(self, visible_slot: int) -> None:
+        view = self._food_selection
+        index = view.page * FOOD_SELECTION_PAGE_SIZE + visible_slot
+        if view.request_in_progress or not 0 <= index < len(view.names):
+            return
+        self._food_selection = replace(view, selected_index=index)
+
+    def next_food_selection_page(self) -> None:
+        view = self._food_selection
+        pages = max(
+            1,
+            (len(view.names) + FOOD_SELECTION_PAGE_SIZE - 1)
+            // FOOD_SELECTION_PAGE_SIZE,
+        )
+        if view.page + 1 < pages and not view.request_in_progress:
+            self._food_selection = replace(view, page=view.page + 1)
+
+    def previous_food_selection_page(self) -> None:
+        view = self._food_selection
+        if view.page > 0 and not view.request_in_progress:
+            self._food_selection = replace(view, page=view.page - 1)
+
+    def continue_food_selection(self) -> None:
+        view = self._food_selection
+        if view.selected_index is None or view.request_in_progress:
+            return
+        try:
+            submitted = self.continuation.select_food_candidate(view.selected_index)
+        except Exception:
+            self.screen = UIScreen.ERROR
+            self.error_message = FOOD_SELECTION_LIMITATION
+            return
+        if submitted:
+            self._food_selection = replace(view, request_in_progress=True)
+
+    def retry_food_selection(self) -> None:
+        view = self._food_selection
+        if view.retry_available and self.continuation.retry():
+            self._food_selection = replace(
+                view, request_in_progress=True, retry_available=False
+            )
+
+    def tick_continuation(self) -> None:
+        before = self.continuation.state
+        self.continuation.tick()
+        state = self.continuation.state
+        if state is before:
+            return
+        if state is ContinuationState.RETRYABLE_ERROR:
+            self._food_selection = replace(
+                self._food_selection, request_in_progress=False, retry_available=True
+            )
+            return
+        if state is ContinuationState.REVOKED:
+            self._store.cleanup()
+            self._clear_analysis_state()
+            self.continuation.revoke()
+            self.screen = UIScreen.HOME
+            return
+        if state is ContinuationState.TERMINAL_ERROR:
+            self._food_selection = FoodSelectionView((), 0, None, False, False)
+            self.screen = UIScreen.ERROR
+            self.error_message = self.continuation.error_message or ANALYSIS_ERROR
+            return
+        response = self.continuation.response
+        if response is not None:
+            self._show_analysis_response(response)
 
     def analyze(self) -> None:
         self.error_message = None
@@ -586,20 +753,12 @@ class MealCaptureWorkflow:
             self.error_message = ANALYSIS_ERROR
             self._clear_analysis_state()
             return
-        self.screen = STATUS_SCREENS[result.status]
-        self.result_message = RESULT_MESSAGES[result.status]
         if isinstance(result, MealAnalysisResponse):
             self.continuation.accept_initial_response(result)
-            # The renderer receives a presentation-only response.  The
-            # continuation workflow exclusively owns opaque backend IDs.
-            self.analysis_response = replace(
-                result,
-                analysis_session_id=None,
-                analysis_session_expires_at=None,
-                components=None,
-            )
-            self.recognized_foods = result.recognized_foods
-            self.recognition_source = result.recognition_source
+            self._show_analysis_response(result)
+        else:
+            self.screen = STATUS_SCREENS[result.status]
+            self.result_message = RESULT_MESSAGES[result.status]
         self.captured_weight_grams = None
         self.analysis_retry_available = False
 
@@ -614,6 +773,9 @@ class MealCaptureWorkflow:
             self.screen = UIScreen.RECOGNIZED_FOODS
 
     def retry(self) -> None:
+        if self.screen is UIScreen.FOOD_SELECTION:
+            self.retry_food_selection()
+            return
         if self.analysis_retry_available and self._store.image_path is not None:
             self.analysis_retry_available = False
             self.error_message = None
@@ -684,11 +846,33 @@ class MealCaptureWorkflow:
 
     def _clear_analysis_state(self) -> None:
         self.continuation.home()
+        self._food_selection = FoodSelectionView((), 0, None, False, False)
         self.recognized_foods = ()
         self.recognition_source = None
         self.analysis_response = None
         self.captured_weight_grams = None
         self.analysis_retry_available = False
+
+    def _show_analysis_response(self, response: MealAnalysisResponse) -> None:
+        self.screen = STATUS_SCREENS[response.status]
+        self.result_message = RESULT_MESSAGES[response.status]
+        # The renderer receives a presentation-only response.  The continuation
+        # workflow exclusively owns opaque backend IDs and candidate mappings.
+        self.analysis_response = replace(
+            response,
+            analysis_session_id=None,
+            analysis_session_expires_at=None,
+            components=None,
+        )
+        self.recognized_foods = response.recognized_foods
+        self.recognition_source = response.recognition_source
+        if response.status is AnalysisStatus.REQUIRES_FOOD_SELECTION:
+            names = self.continuation.food_candidate_names
+            if not names:
+                self.screen = UIScreen.ERROR
+                self.error_message = FOOD_SELECTION_LIMITATION
+                return
+            self._food_selection = FoodSelectionView(names, 0, None, False, False)
 
     def _cleanup_or_error(self) -> bool:
         if self._store.cleanup():
