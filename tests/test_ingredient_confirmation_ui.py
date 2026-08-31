@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import Future
+from dataclasses import replace
 from pathlib import Path
 
 from nutribox_pi.adapters import pygame_device_ui
@@ -24,6 +25,7 @@ from nutribox_pi.device_ui import (
 )
 from nutribox_pi.models import (
     AnalysisStatus,
+    MealAnalysisCandidate,
     MealAnalysisComponent,
     MealAnalysisResponse,
     RecognitionSource,
@@ -57,6 +59,12 @@ class Backend:
         self.calls: list[tuple[object, ...]] = []
 
     def update_ingredients(self, *values: object, **_: object) -> MealAnalysisResponse:
+        self.calls.append(values)
+        return self.response
+
+    def select_ingredient_candidate(
+        self, *values: object, **_: object
+    ) -> MealAnalysisResponse:
         self.calls.append(values)
         return self.response
 
@@ -289,3 +297,39 @@ def test_editor_and_checkbox_rectangles_are_separate() -> None:
         button for button in buttons if button.action is UIAction.EDIT_INGREDIENT_0
     )
     assert checkbox.rectangle.x + checkbox.rectangle.width <= edit.rectangle.x
+
+
+def test_unresolved_response_opens_safe_candidate_screen_and_submits_once(
+    tmp_path: Path,
+) -> None:
+    flow, backend = _workflow(tmp_path, ingredients=1)
+    source = _response(ingredients=1)
+    original_component = source.components[0]
+    unresolved_ingredient = replace(
+        original_component.suggested_ingredients[0],
+        resolution_status="requires_food_selection",
+        candidates=(
+            MealAnalysisCandidate(
+                "rice, cooked", "123e4567-e89b-12d3-a456-426614175000"
+            ),
+            MealAnalysisCandidate("rice, raw", "123e4567-e89b-12d3-a456-426614175001"),
+        ),
+    )
+    response = replace(
+        source,
+        components=(
+            replace(original_component, suggested_ingredients=(unresolved_ingredient,)),
+        ),
+    )
+    flow.continuation.accept_initial_response(response)
+    flow._show_analysis_response(response)
+    assert flow.screen is UIScreen.INGREDIENT_CANDIDATE_SELECTION
+    assert flow.ingredient_candidates.selected_index is None
+    assert "175000" not in repr(flow.ingredient_candidates)
+    flow.select_ingredient_candidate(1)
+    flow.continue_ingredient_candidate()
+    flow.continue_ingredient_candidate()
+    assert len(backend.calls) == 1
+    assert backend.calls[0][0] == 42
+    selection = backend.calls[0][2]
+    assert selection.candidate_id.endswith("5001")

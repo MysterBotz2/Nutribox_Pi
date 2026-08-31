@@ -27,6 +27,7 @@ from nutribox_pi.models import (
     MealAnalysisResponse,
     MealAnalysisSelection,
     PersonalRecipeSelection,
+    SuggestedIngredient,
 )
 from nutribox_pi.ports import DeviceAuthenticationFailure, RetryableBackendFailure
 
@@ -265,6 +266,34 @@ class MealAnalysisContinuationWorkflow:
             )
         )
 
+    @property
+    def unresolved_ingredient_names(self) -> tuple[str, ...]:
+        return tuple(
+            ingredient.name for _, ingredient in self._unresolved_ingredients()
+        )
+
+    def unresolved_candidate_names(self, ingredient_index: int) -> tuple[str, ...]:
+        _, ingredient = self._unresolved_ingredient(ingredient_index)
+        return tuple(candidate.name for candidate in ingredient.candidates)
+
+    def select_ingredient_candidate_ordinal(
+        self, ingredient_index: int, candidate_index: int
+    ) -> bool:
+        component, ingredient = self._unresolved_ingredient(ingredient_index)
+        if isinstance(candidate_index, bool) or not isinstance(candidate_index, int):
+            raise ContinuationError("meal analysis candidate is unavailable")
+        if not 0 <= candidate_index < len(ingredient.candidates):
+            raise ContinuationError("meal analysis candidate is unavailable")
+        candidate = ingredient.candidates[candidate_index]
+        if candidate.candidate_id is None:
+            raise ContinuationError("meal analysis candidate is unavailable")
+        return self.select_ingredient_candidate(
+            component.component_id,
+            IngredientCandidateSelection(
+                ingredient.ingredient_id, candidate.candidate_id
+            ),
+        )
+
     def use_recipe(self, component_id: str, selection: PersonalRecipeSelection) -> bool:
         self._require_recipe(component_id, selection)
         session_id = self._session_id()
@@ -435,6 +464,27 @@ class MealAnalysisContinuationWorkflow:
         if not component.suggested_ingredients:
             raise ContinuationError("meal analysis ingredient is unavailable")
         return component
+
+    def _unresolved_ingredients(
+        self,
+    ) -> tuple[tuple[MealAnalysisComponent, SuggestedIngredient], ...]:
+        return tuple(
+            (component, ingredient)
+            for component in self._ingredients()
+            for ingredient in component.suggested_ingredients
+            if ingredient.resolution_status == "requires_food_selection"
+            and ingredient.candidates
+        )
+
+    def _unresolved_ingredient(
+        self, index: int
+    ) -> tuple[MealAnalysisComponent, SuggestedIngredient]:
+        if isinstance(index, bool) or not isinstance(index, int):
+            raise ContinuationError("meal analysis candidate is unavailable")
+        choices = self._unresolved_ingredients()
+        if not 0 <= index < len(choices):
+            raise ContinuationError("meal analysis candidate is unavailable")
+        return choices[index]
 
     def _require_state(self, state: ContinuationState) -> None:
         if self._state is not state:

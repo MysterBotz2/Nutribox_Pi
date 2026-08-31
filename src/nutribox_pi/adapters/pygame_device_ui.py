@@ -37,6 +37,7 @@ from nutribox_pi.device_ui import (
     UI_CLOSED,
     ButtonLayout,
     FoodSelectionView,
+    IngredientCandidateView,
     IngredientVerificationView,
     MealCaptureWorkflow,
     NutritionTab,
@@ -286,6 +287,7 @@ def _run_loop(
                     _food_selection(workflow),
                     _nutrition_view(workflow),
                     _ingredient_verification(workflow),
+                    _ingredient_candidates(workflow),
                 )
                 if pressed is not None or action is None:
                     continue
@@ -323,6 +325,7 @@ def _run_loop(
                     _food_selection(workflow),
                     _nutrition_view(workflow),
                     _ingredient_verification(workflow),
+                    _ingredient_candidates(workflow),
                 )
                 is not active_press.action
             ):
@@ -461,6 +464,30 @@ def _apply_action(
         workflow.cancel_ingredient_editor()
     elif action is UIAction.EDITOR_DONE:
         workflow.apply_ingredient_editor()
+    elif action in {
+        UIAction.SELECT_INGREDIENT_CANDIDATE_0,
+        UIAction.SELECT_INGREDIENT_CANDIDATE_1,
+        UIAction.SELECT_INGREDIENT_CANDIDATE_2,
+        UIAction.SELECT_INGREDIENT_CANDIDATE_3,
+    }:
+        workflow.select_ingredient_candidate(
+            (
+                UIAction.SELECT_INGREDIENT_CANDIDATE_0,
+                UIAction.SELECT_INGREDIENT_CANDIDATE_1,
+                UIAction.SELECT_INGREDIENT_CANDIDATE_2,
+                UIAction.SELECT_INGREDIENT_CANDIDATE_3,
+            ).index(action)
+        )
+    elif action is UIAction.CONTINUE_INGREDIENT_CANDIDATE:
+        workflow.continue_ingredient_candidate()
+    elif action is UIAction.INGREDIENT_CANDIDATE_NEXT:
+        workflow.next_ingredient_candidate_page()
+    elif action is UIAction.INGREDIENT_CANDIDATE_PREVIOUS:
+        workflow.previous_ingredient_candidate_page()
+    elif action is UIAction.INGREDIENT_CANDIDATE_NEXT_ITEM:
+        workflow.next_ingredient_candidate_item()
+    elif action is UIAction.INGREDIENT_CANDIDATE_PREVIOUS_ITEM:
+        workflow.previous_ingredient_candidate_item()
     elif action is UIAction.NUTRITION_OVERVIEW:
         workflow.select_nutrition_tab(NutritionTab.OVERVIEW)
     elif action is UIAction.NUTRITION_MACROS:
@@ -584,6 +611,8 @@ def _render(
         )
     elif workflow.screen is UIScreen.INGREDIENT_EDITOR:
         _render_ingredient_editor(pygame, screen, fonts, workflow)
+    elif workflow.screen is UIScreen.INGREDIENT_CANDIDATE_SELECTION:
+        _render_ingredient_candidates(pygame, screen, fonts, workflow, cache.thumbnail)
     elif workflow.screen in RESULT_SCREENS:
         _render_result(pygame, screen, fonts, workflow, cache.thumbnail)
     elif workflow.screen is UIScreen.RECOGNIZED_FOODS:
@@ -604,6 +633,7 @@ def _render(
         _food_selection(workflow),
         _nutrition_view(workflow),
         _ingredient_verification(workflow),
+        _ingredient_candidates(workflow),
     ):
         button = _localized_button(button, workflow)
         _draw_button(pygame, screen, fonts.button, button, pressed is button.action)
@@ -630,6 +660,16 @@ def _ingredient_verification(
     return (
         workflow.ingredient_verification
         if workflow.screen is UIScreen.REQUIRES_INGREDIENT_VERIFICATION
+        else None
+    )
+
+
+def _ingredient_candidates(
+    workflow: MealCaptureWorkflow,
+) -> IngredientCandidateView | None:
+    return (
+        workflow.ingredient_candidates
+        if workflow.screen is UIScreen.INGREDIENT_CANDIDATE_SELECTION
         else None
     )
 
@@ -1103,6 +1143,36 @@ def _render_ingredient_editor(
     )
     if editor.error:
         _draw_text(screen, fonts.small, editor.error, (400, 184), DANGER)
+
+
+def _render_ingredient_candidates(
+    pygame: Any,
+    screen: Any,
+    fonts: _Fonts,
+    workflow: MealCaptureWorkflow,
+    thumbnail: Any | None,
+) -> None:
+    view = workflow.ingredient_candidates
+    _draw_text(screen, fonts.subheading, "Choose ingredient", (400, 36), NUTRIBOX_BLUE)
+    name = view.ingredient_names[view.ingredient_index] if view.ingredient_names else ""
+    _draw_text(
+        screen, fonts.small, _ellipsize(fonts.small, name, 500), (400, 76), PRIMARY_TEXT
+    )
+    if thumbnail is not None:
+        size = scaled_image_size(tuple(thumbnail.get_size()), (100, 56))
+        screen.blit(pygame.transform.smoothscale(thumbnail, size), (28, 82))
+    start = view.candidate_page * FOOD_SELECTION_PAGE_SIZE
+    for offset, candidate in enumerate(
+        view.candidate_names[start : start + FOOD_SELECTION_PAGE_SIZE]
+    ):
+        mark = "(o)" if view.selected_index == start + offset else "( )"
+        _draw_text(
+            screen,
+            fonts.body,
+            _ellipsize(fonts.body, f"{mark} {candidate}", 450),
+            (278, 167 + offset * 48),
+            PRIMARY_TEXT,
+        )
 
 
 def _render_result(
