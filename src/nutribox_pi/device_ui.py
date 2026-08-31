@@ -107,6 +107,7 @@ class UIAction(StrEnum):
     ANALYZE = "analyze"
     ANALYZE_MEAL = "analyze_meal"
     SHOW_RECOGNIZED_FOODS = "show_recognized_foods"
+    SAVE_MEAL = "save_meal"
     ANALYZE_AGAIN = "analyze_again"
     CAPTURE = "capture"
     BACK = "back"
@@ -514,9 +515,10 @@ def _calculated_buttons(view: NutritionView) -> tuple[ButtonLayout, ...]:
             "See recognized foods",
             TouchRect(20, 400, 230, 60),
         ),
-        ButtonLayout(UIAction.RETAKE, "Retake", TouchRect(260, 400, 160, 60), "card"),
-        ButtonLayout(UIAction.HOME, "Home", TouchRect(430, 400, 160, 60)),
-        ButtonLayout(UIAction.EXIT, "Exit", TouchRect(600, 400, 180, 60), "danger"),
+        ButtonLayout(UIAction.SAVE_MEAL, "Save Meal", TouchRect(260, 400, 160, 60)),
+        ButtonLayout(UIAction.RETAKE, "Retake", TouchRect(430, 400, 110, 60), "card"),
+        ButtonLayout(UIAction.HOME, "Home", TouchRect(550, 400, 110, 60)),
+        ButtonLayout(UIAction.EXIT, "Exit", TouchRect(670, 400, 110, 60), "danger"),
     )
 
 
@@ -1466,6 +1468,10 @@ class MealCaptureWorkflow:
     def show_recognized_foods(self) -> None:
         if self.screen is UIScreen.CALCULATED:
             self.screen = UIScreen.RECOGNIZED_FOODS
+
+    def save_meal(self) -> None:
+        if self.screen is UIScreen.CALCULATED:
+            self.continuation.save()
 
     def retry(self) -> None:
         if self.screen is UIScreen.FOOD_SELECTION:

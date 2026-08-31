@@ -47,6 +47,15 @@ class ContinuationState(StrEnum):
     REQUIRES_RECIPE_CONFIRMATION = AnalysisStatus.REQUIRES_RECIPE_CONFIRMATION
 
 
+class SaveState(StrEnum):
+    UNAVAILABLE = "unavailable"
+    READY = "ready"
+    SAVING = "saving"
+    SAVED = "saved"
+    FAILURE = "failure"
+    UNCERTAIN = "uncertain"
+
+
 class ContinuationError(RuntimeError):
     """A safe local rejection of an invalid continuation action."""
 
@@ -95,6 +104,25 @@ class MealAnalysisContinuationWorkflow:
         self._generation = 0
         self._retry: Callable[[], MealAnalysisResponse] | None = None
         self._closed = False
+        self._save_state = SaveState.UNAVAILABLE
+        self._save_generation = 0
+        self._save_future: Future[object] | None = None
+
+    @property
+    def save_state(self) -> SaveState:
+        return self._save_state
+
+    def save(self) -> bool:
+        if self._save_state is not SaveState.READY or self._response is None:
+            return False
+        session_id = self._session_id()
+        self._save_state = SaveState.SAVING
+        generation = self._generation
+        self._save_future = self._executor.submit(
+            self._controller.save_meal, session_id
+        )
+        self._pending_generation = generation
+        return True
 
     @property
     def state(self) -> ContinuationState:
@@ -326,6 +354,20 @@ class MealAnalysisContinuationWorkflow:
         return self._submit(action)
 
     def tick(self) -> None:
+        save_future = self._save_future
+        if save_future is not None and save_future.done():
+            self._save_future = None
+            try:
+                save_future.result()
+            except DeviceAuthenticationFailure:
+                self.revoke()
+            except RetryableBackendFailure:
+                self._save_state = SaveState.UNCERTAIN
+            except Exception:
+                self._save_state = SaveState.FAILURE
+            else:
+                self._save_state = SaveState.SAVED
+            return
         future = self._future
         if future is None or not future.done():
             return
@@ -395,6 +437,12 @@ class MealAnalysisContinuationWorkflow:
         self._retry = None
         self._error_message = None
         self._state = state
+        self._save_state = (
+            SaveState.READY
+            if state is ContinuationState.CALCULATED
+            and response.analysis_session_id is not None
+            else SaveState.UNAVAILABLE
+        )
 
     def _submit(self, action: Callable[[], MealAnalysisResponse]) -> bool:
         if self._closed or self._state is ContinuationState.REQUEST_IN_PROGRESS:
@@ -512,6 +560,8 @@ class MealAnalysisContinuationWorkflow:
         self._clear_retry()
         self._error_message = None
         self._state = ContinuationState.IDLE
+        self._save_state = SaveState.UNAVAILABLE
+        self._save_generation += 1
 
     def _clear_retry(self) -> None:
         self._retry = None

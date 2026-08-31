@@ -520,6 +520,8 @@ def _apply_action(
         workflow.retake()
     elif action is UIAction.SHOW_RECOGNIZED_FOODS:
         workflow.show_recognized_foods()
+    elif action is UIAction.SAVE_MEAL:
+        workflow.save_meal()
     elif action is UIAction.ANALYZE_AGAIN:
         if image_cache is not None:
             image_cache.clear()

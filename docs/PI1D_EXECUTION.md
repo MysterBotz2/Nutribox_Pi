@@ -162,3 +162,13 @@ Confirm Retake starts a new preview session. Then validate visible Analyzing,
 all four analysis outcomes, source labeling, Home, and Exit behavior. Review
 images preserve their aspect ratio, and no meal image remains after analysis
 or exit.
+
+## Explicit paired-meal saving
+
+For a paired device, validate the complete path: Pair → Capture → Analyze →
+Continue/Confirm → Calculate → Save Meal → verify the meal in Web Companion.
+Save Meal is always explicit; navigation, Retake, Home, and Exit never save a
+meal. Anonymous analysis cannot be saved to an account. The backend derives
+ownership from `X-Device-Token`; the Pi stores no user bearer token. If saving
+reports an uncertain status, check Web Companion before attempting another
+save.
