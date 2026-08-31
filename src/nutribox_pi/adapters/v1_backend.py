@@ -12,6 +12,7 @@ from uuid import UUID
 import requests
 
 from nutribox_pi.models import (
+    AdditionalNutrientValues,
     AnalysisResult,
     AnalysisStatus,
     CalculatedFoodReference,
@@ -24,6 +25,10 @@ from nutribox_pi.models import (
     MealAnalysisComponent,
     MealAnalysisResponse,
     MealAnalysisSelection,
+    MealItemNutritionSource,
+    MealItemResponse,
+    MealResponse,
+    MealTotals,
     NutritionReferenceNotFoundResponse,
     NutritionValues,
     PersonalRecipeMatch,
@@ -33,6 +38,7 @@ from nutribox_pi.models import (
     RequiresFoodSelectionResponse,
     RequiresIngredientVerificationResponse,
     RequiresRecipeConfirmationResponse,
+    SavedMealFood,
     SuggestedIngredient,
 )
 from nutribox_pi.ports import DeviceAuthenticationFailure, RetryableBackendFailure
@@ -198,6 +204,21 @@ class V1BackendClient:
             None,
             device_token,
         )
+
+    def save_meal(
+        self, analysis_session_id: int, device_token: str | None = None
+    ) -> MealResponse:
+        if not device_token:
+            raise BackendError("verified device credential is required")
+        options: dict[str, Any] = {"json": {"analysis_session_id": analysis_session_id}}
+        if device_token:
+            options["headers"] = {"X-Device-Token": device_token}
+        response = self._request(
+            "POST",
+            "/api/meals",
+            **options,
+        )
+        return _meal_response(self._json_object(response))
 
     def _continue(
         self,
@@ -394,6 +415,150 @@ _NUTRIENT_FIELDS = {
     "folate_mcg_dfe",
     "niacin_mg",
 }
+
+_SAVED_EXTRA = {
+    "saturated_fat_g",
+    "sugars_g",
+    "sodium_mg",
+    "cholesterol_mg",
+    "omega_3_g",
+    "omega_6_g",
+    "calcium_mg",
+    "potassium_mg",
+    "zinc_mg",
+    "iron_mg",
+    "magnesium_mg",
+    "energy_kj",
+    "phosphorus_mg",
+    "vitamin_b6_mg",
+    "niacin_mg",
+    "vitamin_a_mcg_rae",
+    "vitamin_b12_mcg",
+    "vitamin_c_mg",
+    "vitamin_d_mcg",
+    "folate_mcg_dfe",
+}
+
+
+def _meal_response(payload: object) -> MealResponse:
+    try:
+        if not isinstance(payload, dict) or set(payload) != {
+            "id",
+            "recorded_at",
+            "items",
+            "totals",
+            "additional_totals",
+        }:
+            raise ValueError
+        recorded = _optional_expiry(payload, "recorded_at")
+        if recorded is None or not isinstance(payload["items"], list):
+            raise ValueError
+        totals = _meal_totals(payload["totals"])
+        additional = _additional(payload["additional_totals"])
+        return MealResponse(
+            _saved_id(payload["id"]),
+            recorded,
+            tuple(_meal_item(item) for item in payload["items"]),
+            totals,
+            additional,
+        )
+    except Exception as exc:
+        raise MalformedBackendResponseError(
+            "backend returned an invalid saved meal"
+        ) from exc
+
+
+def _saved_id(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError
+    return value
+
+
+def _additional(value: object) -> AdditionalNutrientValues:
+    if not isinstance(value, dict) or set(value) != _SAVED_EXTRA:
+        raise ValueError
+    return AdditionalNutrientValues(
+        {key: _nullable_decimal(value[key]) for key in _SAVED_EXTRA}
+    )
+
+
+def _nullable_decimal(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError
+    _validate_saved_decimal(value)
+    return value
+
+
+def _meal_totals(value: object) -> MealTotals:
+    if not isinstance(value, dict) or set(value) != {
+        "calories",
+        "protein_g",
+        "carbohydrates_g",
+        "fat_g",
+        "fiber_g",
+        *_SAVED_EXTRA,
+    }:
+        raise ValueError
+    return MealTotals(
+        *(
+            _decimal(value[key])
+            for key in ("calories", "protein_g", "carbohydrates_g", "fat_g", "fiber_g")
+        ),
+        _additional({key: value[key] for key in _SAVED_EXTRA}),
+    )
+
+
+def _decimal(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError
+    _validate_saved_decimal(value)
+    return value
+
+
+def _validate_saved_decimal(value: str) -> None:
+    if not Decimal(value).is_finite() or Decimal(value) < 0:
+        raise ValueError
+
+
+def _meal_item(value: object) -> MealItemResponse:
+    if (
+        not isinstance(value, dict)
+        or set(value)
+        - {
+            "id",
+            "food",
+            "weight_grams",
+            "nutrition",
+            "nutrition_source",
+            "composite_estimation",
+        }
+        or not {"id", "food", "weight_grams", "nutrition"} <= set(value)
+    ):
+        raise ValueError
+    food = value["food"]
+    if not isinstance(food, dict) or set(food) != {"id", "name"}:
+        raise ValueError
+    source = value.get("nutrition_source")
+    provenance = (
+        None
+        if source is None
+        else MealItemNutritionSource(
+            source["category"],
+            source["name"],
+            source["reference"],
+            source["is_estimated"],
+        )
+    )
+    return MealItemResponse(
+        _saved_id(value["id"]),
+        SavedMealFood(food["id"], food["name"]),
+        _decimal(value["weight_grams"]),
+        _meal_totals(value["nutrition"]),
+        provenance,
+        value.get("composite_estimation", False),
+    )
 
 
 def _recognized_food(value: object) -> RecognizedFood:

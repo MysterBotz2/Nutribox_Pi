@@ -92,6 +92,10 @@ class Backend(Protocol):
         device_token: str | None = None,
     ) -> MealAnalysisResponse: ...
 
+    def save_meal(
+        self, analysis_session_id: int, device_token: str | None = None
+    ) -> object: ...
+
 
 class VerifiedDeviceCredentialProvider(Protocol):
     def get_verified_device_token(self) -> str | None: ...

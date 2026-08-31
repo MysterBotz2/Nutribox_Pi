@@ -33,6 +33,129 @@ class AnalysisResult:
     payload: dict[str, Any]
 
 
+_SAVED_OPTIONAL_NUTRIENTS = (
+    "saturated_fat_g",
+    "sugars_g",
+    "sodium_mg",
+    "cholesterol_mg",
+    "omega_3_g",
+    "omega_6_g",
+    "calcium_mg",
+    "potassium_mg",
+    "zinc_mg",
+    "iron_mg",
+    "magnesium_mg",
+    "energy_kj",
+    "phosphorus_mg",
+    "vitamin_b6_mg",
+    "niacin_mg",
+    "vitamin_a_mcg_rae",
+    "vitamin_b12_mcg",
+    "vitamin_c_mg",
+    "vitamin_d_mcg",
+    "folate_mcg_dfe",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class AdditionalNutrientValues:
+    values: dict[str, str | None]
+
+    def __post_init__(self) -> None:
+        if set(self.values) != set(_SAVED_OPTIONAL_NUTRIENTS):
+            raise ValueError("saved meal nutrients are invalid")
+        for value in self.values.values():
+            if value is not None:
+                _validate_decimal_string(value)
+
+
+@dataclass(frozen=True, slots=True)
+class MealTotals:
+    calories: str
+    protein_g: str
+    carbohydrates_g: str
+    fat_g: str
+    fiber_g: str
+    additional: AdditionalNutrientValues
+
+    def __post_init__(self) -> None:
+        for value in (
+            self.calories,
+            self.protein_g,
+            self.carbohydrates_g,
+            self.fat_g,
+            self.fiber_g,
+        ):
+            _validate_decimal_string(value)
+
+
+@dataclass(frozen=True, slots=True)
+class MealItemNutritionSource:
+    category: str | None
+    name: str | None
+    reference: str | None
+    is_estimated: bool | None
+
+    def __post_init__(self) -> None:
+        if self.category not in {
+            None,
+            "canteen_recipe",
+            "local_database",
+            "USDA",
+            "AI_estimate",
+            "ai_recipe_estimate",
+        }:
+            raise ValueError("saved meal provenance is invalid")
+        if self.is_estimated is not None and not isinstance(self.is_estimated, bool):
+            raise ValueError("saved meal provenance is invalid")
+        for value in (self.name, self.reference):
+            if value is not None:
+                _validate_text(value)
+
+
+@dataclass(frozen=True, slots=True)
+class SavedMealFood:
+    id: int | None
+    name: str
+
+    def __post_init__(self) -> None:
+        if self.id is not None:
+            _validate_positive_id(self.id)
+        _validate_text(self.name)
+
+
+@dataclass(frozen=True, slots=True)
+class MealItemResponse:
+    id: int
+    food: SavedMealFood
+    weight_grams: str
+    nutrition: MealTotals
+    nutrition_source: MealItemNutritionSource | None
+    composite_estimation: bool
+
+    def __post_init__(self) -> None:
+        _validate_positive_id(self.id)
+        _validate_decimal_range(
+            self.weight_grams, positive=True, maximum=Decimal("5000")
+        )
+        if not isinstance(self.composite_estimation, bool):
+            raise ValueError("saved meal item is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class MealResponse:
+    id: int
+    recorded_at: datetime
+    items: tuple[MealItemResponse, ...]
+    totals: MealTotals
+    additional_totals: AdditionalNutrientValues
+
+    def __post_init__(self) -> None:
+        _validate_positive_id(self.id)
+        if self.recorded_at.tzinfo is None or self.recorded_at.utcoffset() is None:
+            raise ValueError("saved meal timestamp is invalid")
+
+
 @dataclass(frozen=True, slots=True)
 class NutritionValues:
     """Nutrition values retained exactly as backend decimal strings or null."""

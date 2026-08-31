@@ -382,7 +382,6 @@ class MealAnalysisContinuationWorkflow:
     def _replace_response(self, response: MealAnalysisResponse) -> None:
         state = _STATUS_STATES[response.status]
         if state in {
-            ContinuationState.CALCULATED,
             ContinuationState.FOOD_NOT_RECOGNIZED,
             ContinuationState.NUTRITION_REFERENCE_NOT_FOUND,
         }:

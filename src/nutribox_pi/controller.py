@@ -128,6 +128,10 @@ class NutriBoxController:
             "analyze_component_as_new", analysis_session_id, component_id
         )
 
+    def save_meal(self, analysis_session_id: int) -> object:
+        """Save only a backend-owned completed analysis session."""
+        return self._continuation("save_meal", analysis_session_id)
+
     def _continuation(self, operation: str, *values: object) -> MealAnalysisResponse:
         """Invoke an adapter continuation with a freshly verified credential.
 
