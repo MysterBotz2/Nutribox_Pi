@@ -54,6 +54,7 @@ def test_preference_allowlist_privacy_and_malformed_recovery(tmp_path: Path) -> 
         "schema_version",
         "language",
         "show_intro_on_startup",
+        "theme",
     }
     serialized = json.dumps(payload).casefold()
     assert all(

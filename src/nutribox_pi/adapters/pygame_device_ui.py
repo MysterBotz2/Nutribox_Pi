@@ -387,6 +387,24 @@ def _apply_action(
         workflow.continue_from_instruction()
     elif action is UIAction.ANALYZE:
         workflow.analyze()
+    elif action is UIAction.PROFILE_SETTINGS:
+        workflow.open_profile_settings()
+    elif action is UIAction.SETTINGS_BACK:
+        workflow.settings_back()
+    elif action is UIAction.SETTINGS_ENGLISH:
+        workflow.set_settings_language(Language.ENGLISH)
+    elif action is UIAction.SETTINGS_TAGALOG:
+        workflow.set_settings_language(Language.TAGALOG)
+    elif action is UIAction.TOGGLE_THEME:
+        workflow.toggle_theme()
+    elif action is UIAction.SETTINGS_DIAGNOSTICS:
+        workflow.run_diagnostics()
+    elif action is UIAction.UNPAIR:
+        workflow.request_unpair()
+    elif action is UIAction.CANCEL_UNPAIR:
+        workflow.screen = UIScreen.PROFILE_SETTINGS
+    elif action is UIAction.CONFIRM_UNPAIR:
+        workflow.confirm_unpair()
     elif action is UIAction.PAIR_DEVICE:
         workflow.start_pairing()
     elif action is UIAction.CANCEL_PAIRING:
@@ -591,7 +609,7 @@ def _render(
     preview: Any | None = None,
     image_cache: _UiImageCache | None = None,
 ) -> None:
-    _draw_grid(pygame, screen)
+    _draw_grid(pygame, screen, getattr(workflow, "theme", None))
     cache = image_cache or _UiImageCache()
     cache.discard_if_stale(_meal_generation(workflow))
     if workflow.screen is UIScreen.LOADING:
@@ -602,6 +620,8 @@ def _render(
         _render_instruction(pygame, screen, fonts, workflow)
     elif workflow.screen is UIScreen.HOME:
         _render_home(pygame, screen, fonts, workflow)
+    elif workflow.screen in {UIScreen.PROFILE_SETTINGS, UIScreen.UNPAIR_CONFIRM}:
+        _render_profile_settings(pygame, screen, fonts, workflow)
     elif workflow.screen in {UIScreen.CAPTURE, UIScreen.CAPTURING}:
         _render_capture(pygame, screen, fonts, workflow, preview)
     elif workflow.screen is UIScreen.REVIEW:
@@ -702,6 +722,10 @@ def _localized_button(
         UIAction.BACK: "back",
         UIAction.EXIT: "exit",
         UIAction.PAIR_DEVICE: "pair",
+        UIAction.PROFILE_SETTINGS: "profile_settings",
+        UIAction.UNPAIR: "unpair",
+        UIAction.TOGGLE_THEME: "theme",
+        UIAction.SETTINGS_DIAGNOSTICS: "diagnostics",
         UIAction.CONTINUE: "skip",
         UIAction.SELECT_ENGLISH: "english",
         UIAction.SELECT_TAGALOG: "tagalog",
@@ -857,6 +881,64 @@ def _render_home(
             fonts.small,
             workflow.pairing.error_message,
             (400, 410),
+            SECONDARY_TEXT,
+        )
+
+
+def _render_profile_settings(
+    pygame: Any, screen: Any, fonts: _Fonts, workflow: MealCaptureWorkflow
+) -> None:
+    language = workflow.language
+    if workflow.screen is UIScreen.UNPAIR_CONFIRM:
+        _draw_text(screen, fonts.subheading, "Unpair device?", (400, 130), DANGER)
+        _draw_card(pygame, screen, (100, 175, 600, 100))
+        _draw_text(
+            screen,
+            fonts.body,
+            "This device will return to Guest mode.",
+            (400, 225),
+            PRIMARY_TEXT,
+        )
+        return
+    _draw_text(
+        screen,
+        fonts.subheading,
+        text(language, "profile_settings"),
+        (400, 42),
+        NUTRIBOX_BLUE,
+    )
+    _draw_card(pygame, screen, (24, 80, 360, 160))
+    _draw_card(pygame, screen, (416, 80, 360, 160))
+    pairing = workflow.pairing
+    if pairing is not None and pairing.state is PairingState.PAIRED and pairing.device:
+        name = _ellipsize(fonts.body, pairing.device.owner_first_name, 280)
+        _draw_text(screen, fonts.body, name, (204, 140), PRIMARY_TEXT)
+        _draw_text(
+            screen,
+            fonts.small,
+            text(language, "paired_device"),
+            (204, 190),
+            SECONDARY_TEXT,
+        )
+    else:
+        _draw_text(
+            screen, fonts.body, text(language, "guest_mode"), (204, 140), PRIMARY_TEXT
+        )
+        _draw_text(
+            screen, fonts.small, text(language, "pair"), (204, 190), SECONDARY_TEXT
+        )
+    source = "Simulated" if workflow.simulated_weight else "HX711"
+    _draw_text(screen, fonts.body, "Settings", (596, 116), PRIMARY_TEXT)
+    _draw_text(
+        screen, fonts.small, f"Weight source: {source}", (596, 154), SECONDARY_TEXT
+    )
+    _draw_text(screen, fonts.small, "Sensor: configured", (596, 192), SECONDARY_TEXT)
+    if workflow.settings_message:
+        _draw_text(
+            screen,
+            fonts.small,
+            _ellipsize(fonts.small, workflow.settings_message, 520),
+            (400, 250),
             SECONDARY_TEXT,
         )
 
@@ -1539,8 +1621,10 @@ def _ellipsize(font: Any, text: str, maximum_width: int) -> str:
     return shortened + "..."
 
 
-def _draw_grid(pygame: Any, screen: Any) -> None:
-    screen.fill(BACKGROUND)
+def _draw_grid(pygame: Any, screen: Any, theme: Any = None) -> None:
+    screen.fill(
+        (35, 39, 45) if getattr(theme, "value", theme) == "dark" else BACKGROUND
+    )
     if not hasattr(pygame, "draw"):
         return
     pygame.draw.circle(screen, (239, 248, 232), (30, 450), 110)

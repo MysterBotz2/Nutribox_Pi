@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from nutribox_pi.ui_preferences import Language, UIPreferences, UIPreferenceStore
+from nutribox_pi.ui_preferences import Language, Theme, UIPreferences, UIPreferenceStore
 
 
 class StartupMilestone(StrEnum):
@@ -43,6 +43,7 @@ class StartupShell:
         self.preferences = UIPreferences(
             language=language,
             show_intro_on_startup=self.preferences.show_intro_on_startup,
+            theme=self.preferences.theme,
         )
         self.store.save(self.preferences)
 
@@ -50,6 +51,15 @@ class StartupShell:
         self.preferences = UIPreferences(
             language=self.preferences.language,
             show_intro_on_startup=not self.preferences.show_intro_on_startup,
+            theme=self.preferences.theme,
+        )
+        self.store.save(self.preferences)
+
+    def set_theme(self, theme: Theme) -> None:
+        self.preferences = UIPreferences(
+            language=self.preferences.language,
+            show_intro_on_startup=self.preferences.show_intro_on_startup,
+            theme=theme,
         )
         self.store.save(self.preferences)
 
@@ -141,6 +151,12 @@ STRINGS = {
         "save_saved": "Meal saved",
         "save_failed": "Save failed",
         "save_uncertain": "Check Web Companion",
+        "profile_settings": "Profile & Settings",
+        "guest_mode": "Guest mode",
+        "paired_device": "Paired device",
+        "unpair": "Unpair",
+        "theme": "Theme",
+        "diagnostics": "Diagnostics",
     },
     Language.TAGALOG: {
         "choose_language": "Pumili ng wika",
@@ -228,6 +244,12 @@ STRINGS = {
         "save_saved": "Nai-save ang pagkain",
         "save_failed": "Hindi na-save ang pagkain",
         "save_uncertain": "Tingnan ang Web Companion",
+        "profile_settings": "Profile at Settings",
+        "guest_mode": "Guest mode",
+        "paired_device": "Nakapares na device",
+        "unpair": "I-unpair",
+        "theme": "Tema",
+        "diagnostics": "Diagnostics",
     },
 }
 

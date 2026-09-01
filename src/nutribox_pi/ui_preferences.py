@@ -15,11 +15,17 @@ class Language(StrEnum):
     TAGALOG = "tl"
 
 
+class Theme(StrEnum):
+    LIGHT = "light"
+    DARK = "dark"
+
+
 @dataclass(frozen=True, slots=True)
 class UIPreferences:
-    schema_version: int = 1
+    schema_version: int = 2
     language: Language = Language.ENGLISH
     show_intro_on_startup: bool = True
+    theme: Theme = Theme.LIGHT
 
 
 class UIPreferenceStore:
@@ -32,19 +38,17 @@ class UIPreferenceStore:
     def load(self) -> UIPreferences:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
-            if not isinstance(payload, dict) or set(payload) != {
-                "schema_version",
-                "language",
-                "show_intro_on_startup",
+            if not isinstance(payload, dict) or payload.get("schema_version") not in {
+                1,
+                2,
             }:
                 return UIPreferences()
-            if payload["schema_version"] != 1 or not isinstance(
-                payload["show_intro_on_startup"], bool
-            ):
+            if not isinstance(payload["show_intro_on_startup"], bool):
                 return UIPreferences()
             return UIPreferences(
                 language=Language(payload["language"]),
                 show_intro_on_startup=payload["show_intro_on_startup"],
+                theme=Theme(payload.get("theme", Theme.LIGHT)),
             )
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             return UIPreferences()

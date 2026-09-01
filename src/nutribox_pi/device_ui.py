@@ -33,7 +33,7 @@ from nutribox_pi.ports import (
     RetryableBackendFailure,
 )
 from nutribox_pi.touchscreen import TouchRect
-from nutribox_pi.ui_preferences import Language
+from nutribox_pi.ui_preferences import Language, Theme
 from nutribox_pi.ui_shell import MILESTONES, StartupShell
 
 DISPLAY_SIZE = (800, 480)
@@ -99,6 +99,8 @@ class UIScreen(StrEnum):
     PAIR_PAIRED = "pair_paired"
     PAIR_EXPIRED = "pair_expired"
     PAIR_ERROR = "pair_error"
+    PROFILE_SETTINGS = "profile_settings"
+    UNPAIR_CONFIRM = "unpair_confirm"
 
 
 class UIAction(StrEnum):
@@ -162,6 +164,15 @@ class UIAction(StrEnum):
     NUTRITION_MICROS = "nutrition_micros"
     NUTRITION_PREVIOUS = "nutrition_previous"
     NUTRITION_NEXT = "nutrition_next"
+    PROFILE_SETTINGS = "profile_settings"
+    SETTINGS_BACK = "settings_back"
+    SETTINGS_ENGLISH = "settings_english"
+    SETTINGS_TAGALOG = "settings_tagalog"
+    TOGGLE_THEME = "toggle_theme"
+    SETTINGS_DIAGNOSTICS = "settings_diagnostics"
+    UNPAIR = "unpair"
+    CONFIRM_UNPAIR = "confirm_unpair"
+    CANCEL_UNPAIR = "cancel_unpair"
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,6 +333,60 @@ def buttons_for(
                 TouchRect(210, 250, 380, 68),
             ),
             _home_pairing_button(pairing_state),
+            ButtonLayout(
+                UIAction.PROFILE_SETTINGS,
+                "Profile & Settings",
+                TouchRect(24, 402, 270, 56),
+                "card",
+            ),
+            EXIT_BUTTON,
+        )
+    if screen is UIScreen.PROFILE_SETTINGS:
+        return (
+            ButtonLayout(
+                UIAction.SETTINGS_BACK, "Back", TouchRect(24, 402, 140, 56), "card"
+            ),
+            ButtonLayout(
+                UIAction.SETTINGS_ENGLISH,
+                "English",
+                TouchRect(180, 270, 180, 52),
+                "card",
+            ),
+            ButtonLayout(
+                UIAction.SETTINGS_TAGALOG,
+                "Tagalog",
+                TouchRect(380, 270, 180, 52),
+                "card",
+            ),
+            ButtonLayout(
+                UIAction.TOGGLE_THEME, "Theme", TouchRect(580, 270, 196, 52), "card"
+            ),
+            ButtonLayout(
+                UIAction.SETTINGS_DIAGNOSTICS,
+                "Diagnostics",
+                TouchRect(180, 334, 180, 52),
+                "card",
+            ),
+            ButtonLayout(
+                UIAction.UNPAIR,
+                "Unpair",
+                TouchRect(380, 334, 180, 52),
+                "danger",
+                pairing_state is PairingState.PAIRED,
+            ),
+            EXIT_BUTTON,
+        )
+    if screen is UIScreen.UNPAIR_CONFIRM:
+        return (
+            ButtonLayout(
+                UIAction.CANCEL_UNPAIR, "Cancel", TouchRect(180, 330, 200, 64), "card"
+            ),
+            ButtonLayout(
+                UIAction.CONFIRM_UNPAIR,
+                "Unpair",
+                TouchRect(420, 330, 200, 64),
+                "danger",
+            ),
             EXIT_BUTTON,
         )
     if screen is UIScreen.CAPTURE:
@@ -907,6 +972,7 @@ class MealCaptureWorkflow:
         simulated_weight: bool = False,
         pairing: PairingWorkflow | None = None,
         startup_shell: StartupShell | None = None,
+        diagnostics_action: Callable[[], object] | None = None,
     ) -> None:
         self._camera = camera
         self._preview: PreviewSession | None = None
@@ -919,6 +985,8 @@ class MealCaptureWorkflow:
         self.simulated_camera = bool(getattr(camera, "is_simulated", False))
         self.pairing = pairing
         self.startup_shell = startup_shell
+        self._diagnostics_action = diagnostics_action
+        self.settings_message: str | None = None
         self.screen = UIScreen.LOADING if startup_shell is not None else UIScreen.HOME
         self._startup_language_selection = startup_shell is not None
         self.error_message: str | None = None
@@ -950,6 +1018,12 @@ class MealCaptureWorkflow:
             else Language.ENGLISH
         )
 
+    @property
+    def theme(self) -> Theme:
+        return (
+            self.startup_shell.preferences.theme if self.startup_shell else Theme.LIGHT
+        )
+
     def tick_startup(self) -> None:
         shell = self.startup_shell
         if self.screen is not UIScreen.LOADING or shell is None:
@@ -973,6 +1047,44 @@ class MealCaptureWorkflow:
     def toggle_intro(self) -> None:
         if self.startup_shell is not None:
             self.startup_shell.toggle_intro()
+
+    def open_profile_settings(self) -> None:
+        self.settings_message = None
+        self.screen = UIScreen.PROFILE_SETTINGS
+
+    def settings_back(self) -> None:
+        self.settings_message = None
+        self.screen = UIScreen.HOME
+
+    def set_settings_language(self, language: Language) -> None:
+        if self.startup_shell is not None:
+            self.startup_shell.select_language(language)
+
+    def toggle_theme(self) -> None:
+        if self.startup_shell is not None:
+            self.startup_shell.set_theme(
+                Theme.DARK if self.theme is Theme.LIGHT else Theme.LIGHT
+            )
+
+    def run_diagnostics(self) -> None:
+        try:
+            report = self._diagnostics_action() if self._diagnostics_action else None
+            self.settings_message = (
+                "Diagnostics passed."
+                if bool(getattr(report, "passed", False))
+                else "Diagnostics unavailable."
+            )
+        except Exception:
+            self.settings_message = "Diagnostics unavailable."
+
+    def request_unpair(self) -> None:
+        if self.pairing is not None and self.pairing.state is PairingState.PAIRED:
+            self.screen = UIScreen.UNPAIR_CONFIRM
+
+    def confirm_unpair(self) -> None:
+        if self.pairing is not None:
+            self.pairing.unpair()
+        self.screen = UIScreen.PROFILE_SETTINGS
 
     def continue_from_instruction(self) -> None:
         self.screen = UIScreen.HOME
