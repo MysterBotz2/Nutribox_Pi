@@ -289,6 +289,7 @@ def _run_loop(
                     _nutrition_view(workflow),
                     _ingredient_verification(workflow),
                     _ingredient_candidates(workflow),
+                    getattr(workflow, "save_enabled", False),
                 )
                 if pressed is not None or action is None:
                     continue
@@ -327,6 +328,7 @@ def _run_loop(
                     _nutrition_view(workflow),
                     _ingredient_verification(workflow),
                     _ingredient_candidates(workflow),
+                    getattr(workflow, "save_enabled", False),
                 )
                 is not active_press.action
             ):
@@ -637,6 +639,7 @@ def _render(
         _nutrition_view(workflow),
         _ingredient_verification(workflow),
         _ingredient_candidates(workflow),
+        getattr(workflow, "save_enabled", False),
     ):
         button = _localized_button(button, workflow)
         _draw_button(pygame, screen, fonts.button, button, pressed is button.action)
@@ -1304,11 +1307,13 @@ def _render_nutrition_contents(
     )
     continuation = getattr(workflow, "continuation", None)
     message = {
-        SaveState.SAVING: "Saving…",
-        SaveState.SAVED: "Meal saved",
-        SaveState.FAILURE: "Save failed",
-        SaveState.UNCERTAIN: "Check Web Companion",
-    }.get(getattr(continuation, "save_state", None))
+        SaveState.SAVING: text(language, "save_saving"),
+        SaveState.SAVED: text(language, "save_saved"),
+        SaveState.FAILURE: text(language, "save_failed"),
+        SaveState.UNCERTAIN: text(language, "save_uncertain"),
+    }.get(getattr(continuation, "save_state", None)) or getattr(
+        workflow, "save_notice", None
+    )
     if message:
         _draw_text(screen, fonts.small, message, (145, 375), PRIMARY_TEXT)
 

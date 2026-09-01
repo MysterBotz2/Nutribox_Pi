@@ -12,6 +12,7 @@ from pathlib import Path
 from nutribox_pi.continuation import (
     ContinuationState,
     MealAnalysisContinuationWorkflow,
+    SaveState,
 )
 from nutribox_pi.controller import NutriBoxController
 from nutribox_pi.models import (
@@ -284,6 +285,7 @@ def buttons_for(
     nutrition_view: NutritionView | None = None,
     ingredient_verification: IngredientVerificationView | None = None,
     ingredient_candidates: IngredientCandidateView | None = None,
+    save_enabled: bool = False,
 ) -> tuple[ButtonLayout, ...]:
     if screen is UIScreen.LOADING:
         return ()
@@ -355,7 +357,7 @@ def buttons_for(
             EXIT_BUTTON,
         )
     if screen is UIScreen.CALCULATED:
-        return _calculated_buttons(nutrition_view or NutritionView())
+        return _calculated_buttons(nutrition_view or NutritionView(), save_enabled)
     if screen is UIScreen.FOOD_SELECTION:
         return _food_selection_buttons(
             food_selection or FoodSelectionView((), 0, None, False, False)
@@ -475,7 +477,9 @@ def _food_selection_buttons(view: FoodSelectionView) -> tuple[ButtonLayout, ...]
     return candidates + navigation
 
 
-def _calculated_buttons(view: NutritionView) -> tuple[ButtonLayout, ...]:
+def _calculated_buttons(
+    view: NutritionView, save_enabled: bool = False
+) -> tuple[ButtonLayout, ...]:
     tab_actions = (
         UIAction.NUTRITION_OVERVIEW,
         UIAction.NUTRITION_MACROS,
@@ -495,7 +499,7 @@ def _calculated_buttons(view: NutritionView) -> tuple[ButtonLayout, ...]:
             tab_actions, tab_labels, CALCULATED_TAB_RECTS, strict=True
         )
     )
-    return tabs + (
+    actions = (
         ButtonLayout(
             UIAction.NUTRITION_PREVIOUS,
             "Previous",
@@ -515,10 +519,18 @@ def _calculated_buttons(view: NutritionView) -> tuple[ButtonLayout, ...]:
             "See recognized foods",
             TouchRect(20, 400, 230, 60),
         ),
-        ButtonLayout(UIAction.SAVE_MEAL, "Save Meal", TouchRect(260, 400, 160, 60)),
         ButtonLayout(UIAction.RETAKE, "Retake", TouchRect(430, 400, 110, 60), "card"),
         ButtonLayout(UIAction.HOME, "Home", TouchRect(550, 400, 110, 60)),
         ButtonLayout(UIAction.EXIT, "Exit", TouchRect(670, 400, 110, 60), "danger"),
+    )
+    if not save_enabled:
+        return tabs + actions
+    return tabs + (
+        actions[0],
+        actions[1],
+        actions[2],
+        ButtonLayout(UIAction.SAVE_MEAL, "Save Meal", TouchRect(260, 400, 160, 60)),
+        *actions[3:],
     )
 
 
@@ -799,6 +811,7 @@ def action_at(
     nutrition_view: NutritionView | None = None,
     ingredient_verification: IngredientVerificationView | None = None,
     ingredient_candidates: IngredientCandidateView | None = None,
+    save_enabled: bool = False,
 ) -> UIAction | None:
     for button in buttons_for(
         screen,
@@ -807,6 +820,7 @@ def action_at(
         nutrition_view,
         ingredient_verification,
         ingredient_candidates,
+        save_enabled,
     ):
         if button.enabled and button.rectangle.contains(x, y):
             return button.action
@@ -924,6 +938,7 @@ class MealCaptureWorkflow:
         )
         self._nutrition_view = NutritionView()
         self._meal_generation = 0
+        self._analysis_started_paired = False
 
     @property
     def language(self) -> Language:
@@ -968,6 +983,9 @@ class MealCaptureWorkflow:
         if self.pairing is None:
             return
         self.pairing.tick()
+        if self._analysis_started_paired and not self._paired_and_verified():
+            self._analysis_started_paired = False
+            self.continuation.disable_save()
         if self.pairing.error_message == REVOKED_MESSAGE and self.screen in {
             UIScreen.CAPTURE,
             UIScreen.CAPTURING,
@@ -1401,6 +1419,7 @@ class MealCaptureWorkflow:
         if self.screen is UIScreen.REVIEW:
             self.error_message = None
             self.result_message = None
+            self._analysis_started_paired = self._paired_and_verified()
             self.screen = UIScreen.ANALYZING
 
     def perform_analysis(self) -> None:
@@ -1452,7 +1471,9 @@ class MealCaptureWorkflow:
             self._clear_analysis_state()
             return
         if isinstance(result, MealAnalysisResponse):
-            self.continuation.accept_initial_response(result)
+            self.continuation.accept_initial_response(
+                result, save_permitted=self._analysis_started_paired
+            )
             self._show_analysis_response(result)
         else:
             self.screen = STATUS_SCREENS[result.status]
@@ -1471,8 +1492,30 @@ class MealCaptureWorkflow:
             self.screen = UIScreen.RECOGNIZED_FOODS
 
     def save_meal(self) -> None:
-        if self.screen is UIScreen.CALCULATED:
+        if self.save_enabled:
             self.continuation.save()
+
+    @property
+    def save_enabled(self) -> bool:
+        return (
+            self.screen is UIScreen.CALCULATED
+            and self._analysis_started_paired
+            and self._paired_and_verified()
+            and self.continuation.save_state is SaveState.READY
+        )
+
+    @property
+    def save_notice(self) -> str | None:
+        response = self.continuation.response
+        if (
+            self.screen is UIScreen.CALCULATED
+            and response is not None
+            and response.analysis_session_id is not None
+            and not self._analysis_started_paired
+            and self._paired_and_verified()
+        ):
+            return "Analyze a new meal while paired to save it."
+        return None
 
     def retry(self) -> None:
         if self.screen is UIScreen.FOOD_SELECTION:
@@ -1570,6 +1613,11 @@ class MealCaptureWorkflow:
         self.captured_weight_grams = None
         self.analysis_retry_available = False
         self._nutrition_view = NutritionView()
+        self._analysis_started_paired = False
+
+    def _paired_and_verified(self) -> bool:
+        pairing = self.pairing
+        return pairing is not None and pairing.get_verified_device_token() is not None
 
     def _advance_meal_generation(self) -> None:
         self._meal_generation = getattr(self, "_meal_generation", 0) + 1

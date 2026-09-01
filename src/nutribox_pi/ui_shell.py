@@ -137,6 +137,10 @@ STRINGS = {
         "nutrition_folate": "Folate",
         "nutrition_vitamin_d": "Vitamin D",
         "nutrition_niacin": "Niacin/B3",
+        "save_saving": "Saving…",
+        "save_saved": "Meal saved",
+        "save_failed": "Save failed",
+        "save_uncertain": "Check Web Companion",
     },
     Language.TAGALOG: {
         "choose_language": "Pumili ng wika",
@@ -220,6 +224,10 @@ STRINGS = {
         "nutrition_folate": "Folate",
         "nutrition_vitamin_d": "Vitamin D",
         "nutrition_niacin": "Niacin/B3",
+        "save_saving": "Sine-save…",
+        "save_saved": "Nai-save ang pagkain",
+        "save_failed": "Hindi na-save ang pagkain",
+        "save_uncertain": "Tingnan ang Web Companion",
     },
 }
 

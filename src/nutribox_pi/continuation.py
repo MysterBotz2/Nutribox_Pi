@@ -107,22 +107,39 @@ class MealAnalysisContinuationWorkflow:
         self._save_state = SaveState.UNAVAILABLE
         self._save_generation = 0
         self._save_future: Future[object] | None = None
+        self._pending_save_generation: int | None = None
+        self._save_permitted = False
 
     @property
     def save_state(self) -> SaveState:
         return self._save_state
 
     def save(self) -> bool:
-        if self._save_state is not SaveState.READY or self._response is None:
+        if (
+            not self._save_permitted
+            or self._save_state is not SaveState.READY
+            or self._response is None
+        ):
             return False
         session_id = self._session_id()
         self._save_state = SaveState.SAVING
-        generation = self._generation
+        generation = self._save_generation
         self._save_future = self._executor.submit(
             self._controller.save_meal, session_id
         )
-        self._pending_generation = generation
+        self._pending_save_generation = generation
         return True
+
+    def disable_save(self) -> None:
+        """Permanently fence saving for the active response without discarding it."""
+        self._save_permitted = False
+        self._save_generation += 1
+        future = self._save_future
+        self._save_future = None
+        self._pending_save_generation = None
+        if future is not None:
+            future.cancel()
+        self._save_state = SaveState.UNAVAILABLE
 
     @property
     def state(self) -> ContinuationState:
@@ -160,11 +177,14 @@ class MealAnalysisContinuationWorkflow:
             MealAnalysisSelection(component.component_id, candidate.candidate_id)
         )
 
-    def accept_initial_response(self, response: MealAnalysisResponse) -> None:
+    def accept_initial_response(
+        self, response: MealAnalysisResponse, *, save_permitted: bool = False
+    ) -> None:
         """Atomically replace previous session data after initial analysis."""
         if not isinstance(response, MealAnalysisResponse):
             raise ContinuationError("analysis response is invalid")
         self._clear(increment=True)
+        self._save_permitted = save_permitted
         self._replace_response(response)
 
     def select_food_component(self, selection: MealAnalysisSelection) -> bool:
@@ -357,6 +377,10 @@ class MealAnalysisContinuationWorkflow:
         save_future = self._save_future
         if save_future is not None and save_future.done():
             self._save_future = None
+            save_generation = self._pending_save_generation
+            self._pending_save_generation = None
+            if save_generation != self._save_generation or self._closed:
+                return
             try:
                 save_future.result()
             except DeviceAuthenticationFailure:
@@ -439,7 +463,8 @@ class MealAnalysisContinuationWorkflow:
         self._state = state
         self._save_state = (
             SaveState.READY
-            if state is ContinuationState.CALCULATED
+            if self._save_permitted
+            and state is ContinuationState.CALCULATED
             and response.analysis_session_id is not None
             else SaveState.UNAVAILABLE
         )
@@ -562,6 +587,12 @@ class MealAnalysisContinuationWorkflow:
         self._state = ContinuationState.IDLE
         self._save_state = SaveState.UNAVAILABLE
         self._save_generation += 1
+        self._save_permitted = False
+        save_future = self._save_future
+        self._save_future = None
+        self._pending_save_generation = None
+        if save_future is not None:
+            save_future.cancel()
 
     def _clear_retry(self) -> None:
         self._retry = None
