@@ -161,6 +161,41 @@ def test_first_tare_persists_offset_for_later_calibration(tmp_path: Path) -> Non
     assert store.load() == WeightCalibration(25, 2)
 
 
+def test_observed_live_raw_sequence_tares_and_calibrates_later(tmp_path: Path) -> None:
+    samples = (269016, 269028, 269030, 268958, 269043)
+
+    class ObservedDriver(_Driver):
+        def __init__(self, raw: float) -> None:
+            super().__init__([], raw=raw)
+
+        def get_raw_data_mean(self, *, readings: int) -> float:
+            assert readings == 5
+            return self.raw
+
+        def tare(self) -> None:
+            self.offset = self.get_raw_data_mean(readings=5)
+
+    store = WeightCalibrationStore(tmp_path)
+    first = HX711WeightSensor(
+        5,
+        6,
+        calibration_store=store,
+        driver_factory=lambda *_: ObservedDriver(sum(samples) / len(samples)),
+    )
+    first.tare()
+    assert store.load() == WeightCalibration(sum(samples) / len(samples), None)
+
+    later = HX711WeightSensor(
+        5,
+        6,
+        calibration_store=store,
+        driver_factory=lambda *_: ObservedDriver(sum(samples) / len(samples) + 200),
+    )
+    later.calibrate(100)
+    calibration = store.load()
+    assert calibration is not None and calibration.factor not in {None, 0}
+
+
 class _GPIO:
     BCM, IN, OUT, LOW, HIGH = 11, 1, 0, 0, 1
 

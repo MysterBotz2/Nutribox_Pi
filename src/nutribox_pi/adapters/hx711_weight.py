@@ -240,7 +240,7 @@ class _RPiGPIOHX711Driver:
     """Small HX711 channel-A/gain-128 driver using only its assigned BCM pins."""
 
     def __init__(
-        self, data_pin: int, clock_pin: int, *, ready_timeout_seconds: float = 0.2
+        self, data_pin: int, clock_pin: int, *, ready_timeout_seconds: float = 1.0
     ) -> None:
         import RPi.GPIO as gpio  # type: ignore[import-not-found]
 
@@ -301,9 +301,14 @@ class _RPiGPIOHX711Driver:
         value = 0
         for _ in range(24):
             self._gpio.output(self._clock_pin, self._gpio.HIGH)
-            value = (value << 1) | int(bool(self._gpio.input(self._data_pin)))
-            self._gpio.output(self._clock_pin, self._gpio.LOW)
+            try:
+                value = (value << 1) | int(bool(self._gpio.input(self._data_pin)))
+            finally:
+                self._gpio.output(self._clock_pin, self._gpio.LOW)
         # The 25th pulse selects channel A at gain 128 for the next conversion.
         self._gpio.output(self._clock_pin, self._gpio.HIGH)
-        self._gpio.output(self._clock_pin, self._gpio.LOW)
+        try:
+            pass
+        finally:
+            self._gpio.output(self._clock_pin, self._gpio.LOW)
         return value - (1 << 24) if value & (1 << 23) else value
