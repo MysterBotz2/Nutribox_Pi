@@ -5,6 +5,12 @@ from nutribox_pi.adapters.food_recognizer import (
     FoodRecognitionError,
     HttpFoodRecognizer,
 )
+from nutribox_pi.adapters.hx711_weight import (
+    HX711WeightSensor,
+    WeightCalibration,
+    WeightCalibrationStore,
+    WeightSensorUnavailable,
+)
 from nutribox_pi.adapters.mock_hardware import (
     SimulatedTemperatureSensor,
     SimulatedWeightSensor,
@@ -19,5 +25,9 @@ __all__ = [
     "PairingError",
     "SimulatedTemperatureSensor",
     "SimulatedWeightSensor",
+    "HX711WeightSensor",
+    "WeightCalibration",
+    "WeightCalibrationStore",
+    "WeightSensorUnavailable",
     "V1BackendClient",
 ]

@@ -13,8 +13,8 @@ from nutribox_pi.adapters import (
     BackendError,
     DevicePairingClient,
     SimulatedTemperatureSensor,
-    SimulatedWeightSensor,
     V1BackendClient,
+    WeightSensorUnavailable,
 )
 from nutribox_pi.adapters.pygame_device_ui import run_device_ui
 from nutribox_pi.adapters.pygame_touchscreen import run_touchscreen_check
@@ -30,6 +30,7 @@ from nutribox_pi.controller import NutriBoxController
 from nutribox_pi.device_ui import ANALYSIS_ERROR
 from nutribox_pi.diagnostics import DiagnosticsService, format_human_report
 from nutribox_pi.pairing import DeviceCredentialStore, PairingWorkflow
+from nutribox_pi.weight_factory import weight_from_env
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -52,6 +53,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     camera_capture_parser.add_argument("output")
     camera_capture_parser.add_argument("--overwrite", action="store_true")
     camera_capture_parser.add_argument("--json", action="store_true")
+    weight_check_parser = subparsers.add_parser(
+        "weight-check", help="read the configured local weight sensor"
+    )
+    weight_check_parser.add_argument("--json", action="store_true")
+    subparsers.add_parser("weight-tare", help="tare the configured HX711 sensor")
+    weight_calibrate_parser = subparsers.add_parser(
+        "weight-calibrate", help="calibrate the configured HX711 sensor"
+    )
+    weight_calibrate_parser.add_argument("--known-grams", required=True, type=float)
     subparsers.add_parser(
         "touchscreen-check", help="run the local touchscreen smoke test"
     )
@@ -68,12 +78,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 DeviceCredentialStore(),
             )
             pairing.startup_verify()
+            weight_sensor = weight_from_env()
             controller = _controller(settings, pairing)
         except (BackendError, ConfigurationError, ValueError):
             print(ANALYSIS_ERROR)
             return 1
         result = run_device_ui(
-            controller=controller, simulated_weight=True, pairing=pairing
+            controller=controller,
+            simulated_weight=bool(getattr(weight_sensor, "is_simulated", False)),
+            pairing=pairing,
         )
         print(result.message)
         return 0 if result.ok else 1
@@ -101,6 +114,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0 if result.ok else 1
 
+    if args.command in {"weight-check", "weight-tare", "weight-calibrate"}:
+        sensor = weight_from_env()
+        try:
+            if args.command == "weight-check":
+                grams = sensor.read_grams()
+                if args.json:
+                    print(json.dumps({"ok": True, "weight_grams": grams}))
+                else:
+                    print(f"Weight: {grams:g} g")
+            elif args.command == "weight-tare":
+                tare = getattr(sensor, "tare", None)
+                if not callable(tare):
+                    raise WeightSensorUnavailable()
+                tare()
+                print("Weight sensor tared.")
+            else:
+                if not 0 < args.known_grams <= 5000:
+                    raise WeightSensorUnavailable()
+                calibrate = getattr(sensor, "calibrate", None)
+                if not callable(calibrate):
+                    raise WeightSensorUnavailable()
+                calibrate(args.known_grams)
+                print("Weight sensor calibrated.")
+        except (AttributeError, ValueError, WeightSensorUnavailable):
+            print("Weight sensor unavailable.", file=sys.stderr)
+            return 1
+        return 0
+
     if args.command == "diagnostics":
         report = _diagnostics_service().run()
         if args.json:
@@ -123,13 +164,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _controller(
-    settings: Settings, credential_provider: object | None = None
+    settings: Settings,
+    credential_provider: object | None = None,
+    weight_sensor: object | None = None,
 ) -> NutriBoxController:
     return NutriBoxController(
         backend=V1BackendClient(
             settings.api_base_url, timeout_seconds=settings.http_timeout_seconds
         ),
-        weight_sensor=SimulatedWeightSensor(settings.simulated_weight_grams),
+        weight_sensor=weight_sensor or weight_from_env(),
         temperature_sensor=SimulatedTemperatureSensor(settings.simulated_temperature_c),
         credential_provider=credential_provider,  # type: ignore[arg-type]
     )

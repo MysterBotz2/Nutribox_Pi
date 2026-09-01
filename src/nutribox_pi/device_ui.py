@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
+from nutribox_pi.adapters.hx711_weight import WeightSensorUnavailable
 from nutribox_pi.continuation import (
     ContinuationState,
     MealAnalysisContinuationWorkflow,
@@ -53,6 +54,7 @@ PREVIEW_ERROR = "Camera preview is unavailable."
 CLEANUP_ERROR = "Temporary image cleanup failed."
 DISPLAY_ERROR = "The Nutri-Box display is unavailable."
 ANALYSIS_ERROR = "Meal analysis is unavailable."
+WEIGHT_ERROR = "Weight sensor unavailable."
 UI_CLOSED = "Nutri-Box UI closed."
 DEVELOPMENT_NOTICE = "Development mode: simulated weight"
 
@@ -1407,6 +1409,10 @@ class MealCaptureWorkflow:
         ):
             try:
                 self.captured_weight_grams = self._controller.captured_weight_grams()
+            except WeightSensorUnavailable:
+                self._fail_after_cleanup(WEIGHT_ERROR)
+                self.captured_weight_grams = None
+                return
             except Exception:
                 self._fail_after_cleanup(ANALYSIS_ERROR)
                 self.captured_weight_grams = None

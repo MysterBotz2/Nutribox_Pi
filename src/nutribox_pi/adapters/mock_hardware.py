@@ -8,6 +8,7 @@ from nutribox_pi.validation import validate_temperature, validate_weight
 @dataclass(frozen=True, slots=True)
 class SimulatedWeightSensor:
     grams: float = 250.0
+    is_simulated = True
 
     def __post_init__(self) -> None:
         validate_weight(self.grams)
