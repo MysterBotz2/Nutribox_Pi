@@ -7,6 +7,7 @@ import math
 import os
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -16,6 +17,7 @@ from nutribox_pi.adapters.hx711_weight import (
     WeightCalibration,
     WeightCalibrationStore,
     WeightSensorUnavailable,
+    _RPiGPIOHX711Driver,
 )
 from nutribox_pi.adapters.mock_hardware import SimulatedTemperatureSensor
 from nutribox_pi.adapters.simulated_camera import SimulatedCamera
@@ -140,7 +142,65 @@ def test_hx711_tare_and_known_weight_calibration_persist_only_calibration(
     payload = json.loads(
         (tmp_path / "nutribox-pi" / "weight-calibration.json").read_text()
     )
-    assert payload == {"schema_version": 1, "offset": 25.0, "factor": 2.0}
+    assert payload == {"schema_version": 2, "offset": 25.0, "factor": 2.0}
+
+
+def test_first_tare_persists_offset_for_later_calibration(tmp_path: Path) -> None:
+    store = WeightCalibrationStore(tmp_path)
+    first_driver = _Driver([1] * 5, offset=10)
+    HX711WeightSensor(
+        5, 6, calibration_store=store, driver_factory=lambda *_: first_driver
+    ).tare()
+    assert store.load() == WeightCalibration(25, None)
+
+    later_driver = _Driver([1] * 5, offset=999, raw=225)
+    later = HX711WeightSensor(
+        5, 6, calibration_store=store, driver_factory=lambda *_: later_driver
+    )
+    later.calibrate(100)
+    assert store.load() == WeightCalibration(25, 2)
+
+
+class _GPIO:
+    BCM, IN, OUT, LOW, HIGH = 11, 1, 0, 0, 1
+
+    def __init__(self, bits: list[int]) -> None:
+        self.bits = iter(bits)
+        self.outputs: list[tuple[int, int]] = []
+        self.cleaned: object | None = None
+
+    def setmode(self, _: int) -> None:
+        pass
+
+    def setup(self, *_: object, **__: object) -> None:
+        pass
+
+    def output(self, pin: int, value: int) -> None:
+        self.outputs.append((pin, value))
+
+    def input(self, _: int) -> int:
+        return next(self.bits)
+
+    def cleanup(self, pins: object) -> None:
+        self.cleaned = pins
+
+
+def test_private_gpio_driver_reads_signed_bits_and_cleans_only_its_pins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    value = (1 << 24) - 2  # signed 24-bit -2
+    bits = [0] + [int(bit) for bit in f"{value:024b}"]
+    gpio = _GPIO(bits)
+    package = ModuleType("RPi")
+    package.GPIO = gpio  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "RPi", package)
+    monkeypatch.setitem(sys.modules, "RPi.GPIO", gpio)
+    driver = _RPiGPIOHX711Driver(5, 6)
+
+    assert driver.get_raw_data_mean(readings=1) == -2
+    driver.close()
+    assert gpio.cleaned == (5, 6)
+    assert gpio.outputs[-1] == (6, gpio.LOW)
 
 
 @pytest.mark.skipif(

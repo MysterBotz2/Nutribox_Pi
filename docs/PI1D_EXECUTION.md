@@ -138,6 +138,14 @@ NUTRIBOX_HTTP_TIMEOUT_SECONDS=10
 NUTRIBOX_SIMULATED_WEIGHT_GRAMS=250
 ```
 
+For a wired HX711/load cell, use `NUTRIBOX_WEIGHT_ADAPTER=hx711` and provide
+`NUTRIBOX_HX711_DATA_BCM` and `NUTRIBOX_HX711_CLOCK_BCM`. These values are BCM
+GPIO numbers, not physical header-pin numbers: confirm the installed wiring
+before setting them. Run `nutribox-pi weight-tare` with an empty scale, then
+run `nutribox-pi weight-calibrate --known-grams <reference-mass>`. A first tare
+persists only the offset; calibration in a later process uses that offset and
+adds the factor. `weight-check` remains unavailable until calibration succeeds.
+
 Plain HTTP is permitted only for development on the controlled local network.
 A production TLS policy remains unresolved and must be approved before
 production deployment.

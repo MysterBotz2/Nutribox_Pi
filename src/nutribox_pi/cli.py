@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 from collections.abc import Sequence
+from contextlib import suppress
 from pathlib import Path
 
 from nutribox_pi import __version__
@@ -140,6 +141,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (AttributeError, ValueError, WeightSensorUnavailable):
             print("Weight sensor unavailable.", file=sys.stderr)
             return 1
+        finally:
+            close = getattr(sensor, "close", None)
+            if callable(close):
+                with suppress(WeightSensorUnavailable):
+                    close()
         return 0
 
     if args.command == "diagnostics":

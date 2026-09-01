@@ -6,6 +6,7 @@ import json
 import math
 import os
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,7 +14,7 @@ from typing import Any
 
 from nutribox_pi.validation import validate_weight
 
-CALIBRATION_SCHEMA_VERSION = 1
+CALIBRATION_SCHEMA_VERSION = 2
 UNAVAILABLE_MESSAGE = "Weight sensor unavailable."
 
 
@@ -27,15 +28,17 @@ class WeightSensorUnavailable(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class WeightCalibration:
     offset: float
-    factor: float
+    factor: float | None
     schema_version: int = CALIBRATION_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         if (
             self.schema_version != CALIBRATION_SCHEMA_VERSION
             or not math.isfinite(self.offset)
-            or not math.isfinite(self.factor)
-            or self.factor == 0
+            or (
+                self.factor is not None
+                and (not math.isfinite(self.factor) or self.factor == 0)
+            )
         ):
             raise ValueError("weight calibration is invalid")
 
@@ -57,10 +60,16 @@ class WeightCalibrationStore:
             payload = json.loads(self._path.read_text(encoding="utf-8"))
             if set(payload) != {"schema_version", "offset", "factor"}:
                 raise ValueError
+            schema_version = payload["schema_version"]
+            if schema_version not in {1, CALIBRATION_SCHEMA_VERSION}:
+                raise ValueError
+            factor = payload["factor"]
+            if schema_version == 1 and factor is None:
+                raise ValueError
             return WeightCalibration(
-                schema_version=payload["schema_version"],
+                schema_version=CALIBRATION_SCHEMA_VERSION,
                 offset=float(payload["offset"]),
-                factor=float(payload["factor"]),
+                factor=None if factor is None else float(factor),
             )
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise WeightSensorUnavailable() from exc
@@ -132,7 +141,7 @@ class HX711WeightSensor:
 
     def read_grams(self) -> float:
         calibration = self._store.load()
-        if calibration is None:
+        if calibration is None or calibration.factor is None:
             raise WeightSensorUnavailable()
         try:
             driver = self._driver_instance()
@@ -160,8 +169,9 @@ class HX711WeightSensor:
             if not math.isfinite(offset):
                 raise ValueError
             existing = self._store.load()
-            if existing is not None:
-                self._store.save(WeightCalibration(offset, existing.factor))
+            self._store.save(
+                WeightCalibration(offset, existing.factor if existing else None)
+            )
         except WeightSensorUnavailable:
             raise
         except (AttributeError, OSError, TypeError, ValueError) as exc:
@@ -177,7 +187,11 @@ class HX711WeightSensor:
             raise WeightSensorUnavailable()
         try:
             driver = self._driver_instance()
-            offset = float(driver.get_offset())
+            existing = self._store.load()
+            if existing is None:
+                raise WeightSensorUnavailable()
+            offset = existing.offset
+            driver.set_offset(offset)
             raw = float(driver.get_raw_data_mean(readings=self._sample_count))
             factor = (raw - offset) / known_grams
             calibration = WeightCalibration(offset, factor)
@@ -186,6 +200,18 @@ class HX711WeightSensor:
         except WeightSensorUnavailable:
             raise
         except (AttributeError, OSError, TypeError, ValueError) as exc:
+            raise WeightSensorUnavailable() from exc
+
+    def close(self) -> None:
+        driver = self._driver
+        if driver is None:
+            return
+        self._driver = None
+        try:
+            close = getattr(driver, "close", None)
+            if callable(close):
+                close()
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
             raise WeightSensorUnavailable() from exc
 
     def _driver_instance(self) -> Any:
@@ -203,13 +229,81 @@ class HX711WeightSensor:
 
 
 def _load_driver(data_pin: int, clock_pin: int) -> Any:
-    """Import the OS-installed HX711 package only when hardware is selected."""
+    """Create the private RPi.GPIO driver only when HX711 hardware is used."""
     try:
-        from hx711 import HX711  # type: ignore[import-not-found]
-
-        try:
-            return HX711(dout_pin=data_pin, pd_sck_pin=clock_pin)
-        except TypeError:
-            return HX711(data_pin, clock_pin)
+        return _RPiGPIOHX711Driver(data_pin, clock_pin)
     except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
         raise WeightSensorUnavailable() from exc
+
+
+class _RPiGPIOHX711Driver:
+    """Small HX711 channel-A/gain-128 driver using only its assigned BCM pins."""
+
+    def __init__(
+        self, data_pin: int, clock_pin: int, *, ready_timeout_seconds: float = 0.2
+    ) -> None:
+        import RPi.GPIO as gpio  # type: ignore[import-not-found]
+
+        self._gpio = gpio
+        self._data_pin = data_pin
+        self._clock_pin = clock_pin
+        self._ready_timeout = ready_timeout_seconds
+        self._offset = 0.0
+        self._scale: float | None = None
+        gpio.setmode(gpio.BCM)
+        gpio.setup(data_pin, gpio.IN)
+        gpio.setup(clock_pin, gpio.OUT, initial=gpio.LOW)
+        gpio.output(clock_pin, gpio.LOW)
+
+    def set_offset(self, offset: float) -> None:
+        self._offset = float(offset)
+
+    def get_offset(self) -> float:
+        return self._offset
+
+    def set_scale(self, factor: float) -> None:
+        factor = float(factor)
+        if not math.isfinite(factor) or factor == 0:
+            raise ValueError
+        self._scale = factor
+
+    def get_raw_data_mean(self, *, readings: int) -> float:
+        if not 1 <= readings <= 50:
+            raise ValueError
+        samples = [self._read_raw() for _ in range(readings)]
+        return sum(samples) / len(samples)
+
+    def tare(self) -> None:
+        self._offset = self.get_raw_data_mean(readings=5)
+
+    def get_weight_mean(self, *, readings: int) -> float:
+        if self._scale is None:
+            raise ValueError
+        return (self.get_raw_data_mean(readings=readings) - self._offset) / self._scale
+
+    def close(self) -> None:
+        try:
+            self._gpio.output(self._clock_pin, self._gpio.LOW)
+            try:
+                self._gpio.cleanup((self._data_pin, self._clock_pin))
+            except TypeError:
+                self._gpio.cleanup(self._data_pin)
+                self._gpio.cleanup(self._clock_pin)
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            raise WeightSensorUnavailable() from exc
+
+    def _read_raw(self) -> int:
+        deadline = time.monotonic() + self._ready_timeout
+        while self._gpio.input(self._data_pin):
+            if time.monotonic() >= deadline:
+                raise WeightSensorUnavailable()
+            time.sleep(0.001)
+        value = 0
+        for _ in range(24):
+            self._gpio.output(self._clock_pin, self._gpio.HIGH)
+            value = (value << 1) | int(bool(self._gpio.input(self._data_pin)))
+            self._gpio.output(self._clock_pin, self._gpio.LOW)
+        # The 25th pulse selects channel A at gain 128 for the next conversion.
+        self._gpio.output(self._clock_pin, self._gpio.HIGH)
+        self._gpio.output(self._clock_pin, self._gpio.LOW)
+        return value - (1 << 24) if value & (1 << 23) else value
