@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from nutribox_pi.camera_factory import camera_from_env
+from nutribox_pi.continuation import SaveState
 from nutribox_pi.controller import NutriBoxController
 from nutribox_pi.device_ui import (
     ANALYSIS_ERROR,
@@ -1301,6 +1302,15 @@ def _render_nutrition_contents(
         (CALCULATED_PAGINATION.x + CALCULATED_PAGINATION.width // 2, 328),
         SECONDARY_TEXT,
     )
+    continuation = getattr(workflow, "continuation", None)
+    message = {
+        SaveState.SAVING: "Saving…",
+        SaveState.SAVED: "Meal saved",
+        SaveState.FAILURE: "Save failed",
+        SaveState.UNCERTAIN: "Check Web Companion",
+    }.get(getattr(continuation, "save_state", None))
+    if message:
+        _draw_text(screen, fonts.small, message, (145, 375), PRIMARY_TEXT)
 
 
 def _render_meal_summary(

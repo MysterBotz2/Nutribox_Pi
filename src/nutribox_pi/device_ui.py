@@ -1284,9 +1284,10 @@ class MealCaptureWorkflow:
 
     def tick_continuation(self) -> None:
         before = self.continuation.state
+        before_save = self.continuation.save_state
         self.continuation.tick()
         state = self.continuation.state
-        if state is before:
+        if state is before and self.continuation.save_state is before_save:
             return
         if state is ContinuationState.RETRYABLE_ERROR:
             self._food_selection = replace(
