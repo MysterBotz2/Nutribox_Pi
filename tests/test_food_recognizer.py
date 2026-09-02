@@ -65,7 +65,9 @@ def test_recognizer_validates_documented_response_and_sends_one_file(
         FakeResponse({"foods": [{"name": name} for name in names], "source": source})
     )
     result = HttpFoodRecognizer(
-        "https://backend.test", 2, session=session  # type: ignore[arg-type]
+        "https://backend.test",
+        2,
+        session=session,  # type: ignore[arg-type]
     ).recognize_food(_image(tmp_path))
 
     assert [food.name for food in result.foods] == names
@@ -100,7 +102,8 @@ def test_recognizer_prepares_exact_jpeg_multipart_part(tmp_path: Path) -> None:
     session = PreparingSession(FakeResponse({"foods": [], "source": "gemini"}))
 
     HttpFoodRecognizer(
-        "https://backend.test", session=session  # type: ignore[arg-type]
+        "https://backend.test",
+        session=session,  # type: ignore[arg-type]
     ).recognize_food(_image(tmp_path))
 
     assert session.prepared is not None
@@ -132,7 +135,8 @@ def test_recognizer_rejects_invalid_schema(tmp_path: Path, payload: object) -> N
 
     with pytest.raises(FoodRecognitionError, match="response is invalid"):
         HttpFoodRecognizer(
-            "https://backend.test", session=session  # type: ignore[arg-type]
+            "https://backend.test",
+            session=session,  # type: ignore[arg-type]
         ).recognize_food(_image(tmp_path))
 
 
@@ -151,7 +155,8 @@ def test_recognizer_normalizes_http_timeout_and_json_failures(
 
     with pytest.raises(FoodRecognitionError):
         HttpFoodRecognizer(
-            "https://backend.test", session=session  # type: ignore[arg-type]
+            "https://backend.test",
+            session=session,  # type: ignore[arg-type]
         ).recognize_food(_image(tmp_path))
 
 

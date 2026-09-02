@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from nutribox_pi.ui_preferences import Language, Theme, UIPreferences, UIPreferenceStore
@@ -22,7 +22,7 @@ MILESTONES = tuple(StartupMilestone)
 @dataclass(slots=True)
 class StartupShell:
     store: UIPreferenceStore
-    preferences: UIPreferences = UIPreferences()
+    preferences: UIPreferences = field(default_factory=UIPreferences)
     completed: int = 0
 
     @property
@@ -79,7 +79,7 @@ STRINGS = {
         "paired": "Device paired",
         "instructions": "Instructions",
         "skip": "Skip",
-        "media_unavailable": "Instructional media is not installed.",
+        "media_unavailable": "Instructional video is not installed.",
         "camera_preview": "Camera Preview",
         "capture_meal": "Capture Meal",
         "captured_preview": "Captured Meal Preview",
@@ -157,6 +157,18 @@ STRINGS = {
         "unpair": "Unpair",
         "theme": "Theme",
         "diagnostics": "Diagnostics",
+        "portion_analysis": "Portion Analysis",
+        "leftover_scan": "Leftover scan",
+        "portion_explanation": (
+            "This feature compares the saved meal with its remaining portion."
+        ),
+        "portion_status": "Load-cell mounting and calibration required.",
+        "analyze_leftovers": "Analyze Leftovers",
+        "portion_setup": (
+            "Install the load cell, secure the mount, and calibrate before "
+            "enabling leftovers analysis."
+        ),
+        "instructional_video_unavailable": "Instructional video is not installed.",
     },
     Language.TAGALOG: {
         "choose_language": "Pumili ng wika",
@@ -172,7 +184,7 @@ STRINGS = {
         "paired": "Nakonekta ang device",
         "instructions": "Mga Tagubilin",
         "skip": "Magpatuloy",
-        "media_unavailable": "Hindi naka-install ang instructional media.",
+        "media_unavailable": "Hindi naka-install ang instructional video.",
         "camera_preview": "Preview ng Camera",
         "capture_meal": "Kunan ang Pagkain",
         "captured_preview": "Nakunang Preview ng Pagkain",
@@ -250,6 +262,21 @@ STRINGS = {
         "unpair": "I-unpair",
         "theme": "Tema",
         "diagnostics": "Diagnostics",
+        "portion_analysis": "Pagsusuri ng Porsyon",
+        "leftover_scan": "Pagsusuri ng natitirang pagkain",
+        "portion_explanation": (
+            "Ang feature na ito ay naghahambing ng naka-save na pagkain sa "
+            "natitirang bahagi nito."
+        ),
+        "portion_status": "Kinakailangan ang mounting at calibration ng load cell.",
+        "analyze_leftovers": "Suriin ang Natira",
+        "portion_setup": (
+            "I-install ang load cell, i-secure ang mount, at i-calibrate bago "
+            "paganahin ang pagsusuri ng natira."
+        ),
+        "instructional_video_unavailable": (
+            "Hindi naka-install ang instructional video."
+        ),
     },
 }
 

@@ -10,9 +10,11 @@ from nutribox_pi.models import (
     HealthResult,
     IngredientCandidateSelection,
     IngredientVerification,
+    LeftoverScanResponse,
     MealAnalysisResponse,
     MealAnalysisSelection,
     PersonalRecipeSelection,
+    SavedMealPage,
 )
 from nutribox_pi.ports import (
     Backend,
@@ -131,6 +133,36 @@ class NutriBoxController:
     def save_meal(self, analysis_session_id: int) -> object:
         """Save only a backend-owned completed analysis session."""
         return self._continuation("save_meal", analysis_session_id)
+
+    def list_saved_meals(self, limit: int, offset: int) -> SavedMealPage:
+        return self._paired_operation("list_saved_meals", limit, offset)
+
+    def get_saved_meal(self, meal_id: int) -> object:
+        return self._paired_operation("get_saved_meal", meal_id)
+
+    def create_leftover_scan(
+        self, meal_id: int, analysis_session_id: int
+    ) -> LeftoverScanResponse:
+        return self._paired_operation(
+            "create_leftover_scan", meal_id, analysis_session_id
+        )
+
+    def _paired_operation(self, operation: str, *values: object) -> object:
+        token = (
+            self._credential_provider.get_verified_device_token()
+            if self._credential_provider
+            else None
+        )
+        if token is None:
+            raise DeviceAuthenticationFailure("device authentication failed")
+        backend_operation = getattr(self._backend, operation)
+        try:
+            return backend_operation(*values, device_token=token)
+        except DeviceAuthenticationFailure:
+            revoke = getattr(self._credential_provider, "confirm_revocation", None)
+            if callable(revoke):
+                revoke()
+            raise
 
     def _continuation(self, operation: str, *values: object) -> MealAnalysisResponse:
         """Invoke an adapter continuation with a freshly verified credential.

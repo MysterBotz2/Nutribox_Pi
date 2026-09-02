@@ -21,6 +21,8 @@ from nutribox_pi.models import (
     HealthResult,
     IngredientCandidateSelection,
     IngredientVerification,
+    LeftoverScanResponse,
+    LeftoverScanWarning,
     MealAnalysisCandidate,
     MealAnalysisComponent,
     MealAnalysisResponse,
@@ -39,6 +41,8 @@ from nutribox_pi.models import (
     RequiresIngredientVerificationResponse,
     RequiresRecipeConfirmationResponse,
     SavedMealFood,
+    SavedMealListItem,
+    SavedMealPage,
     SuggestedIngredient,
 )
 from nutribox_pi.ports import DeviceAuthenticationFailure, RetryableBackendFailure
@@ -219,6 +223,61 @@ class V1BackendClient:
             **options,
         )
         return _meal_response(self._json_object(response))
+
+    def list_saved_meals(
+        self, limit: int, offset: int, device_token: str | None = None
+    ) -> SavedMealPage:
+        if not device_token:
+            raise BackendError("verified device credential is required")
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 100
+            or isinstance(offset, bool)
+            or not isinstance(offset, int)
+            or offset < 0
+        ):
+            raise BackendError("saved meal page is invalid")
+        response = self._request(
+            "GET",
+            "/api/meals",
+            params={"limit": limit, "offset": offset},
+            headers={"X-Device-Token": device_token},
+        )
+        return _saved_meal_page(self._json_object(response))
+
+    def get_saved_meal(
+        self, meal_id: int, device_token: str | None = None
+    ) -> MealResponse:
+        if not device_token:
+            raise BackendError("verified device credential is required")
+        return _meal_response(
+            self._json_object(
+                self._request(
+                    "GET",
+                    f"/api/meals/{_saved_id(meal_id)}",
+                    headers={"X-Device-Token": device_token},
+                )
+            )
+        )
+
+    def create_leftover_scan(
+        self,
+        meal_id: int,
+        analysis_session_id: int,
+        device_token: str | None = None,
+    ) -> LeftoverScanResponse:
+        if not device_token:
+            raise BackendError("verified device credential is required")
+        meal_id = _saved_id(meal_id)
+        analysis_session_id = _saved_id(analysis_session_id)
+        response = self._request(
+            "POST",
+            f"/api/meals/{meal_id}/leftover-scans",
+            json={"analysis_session_id": analysis_session_id},
+            headers={"X-Device-Token": device_token},
+        )
+        return _leftover_scan_response(self._json_object(response))
 
     def _continue(
         self,
@@ -466,6 +525,112 @@ def _meal_response(payload: object) -> MealResponse:
         raise MalformedBackendResponseError(
             "backend returned an invalid saved meal"
         ) from exc
+
+
+def _saved_meal_page(payload: object) -> SavedMealPage:
+    """Parse the deliberately compact, paginated saved-meal list schema."""
+    try:
+        if not isinstance(payload, dict) or set(payload) != {
+            "meals",
+            "limit",
+            "offset",
+        }:
+            raise ValueError
+        meals = payload["meals"]
+        if not isinstance(meals, list):
+            raise ValueError
+        return SavedMealPage(
+            tuple(_saved_meal_list_item(item) for item in meals),
+            payload["limit"],
+            payload["offset"],
+        )
+    except (TypeError, ValueError, KeyError) as exc:
+        raise MalformedBackendResponseError(
+            "backend returned an invalid saved meal list"
+        ) from exc
+
+
+def _saved_meal_list_item(value: object) -> SavedMealListItem:
+    if not isinstance(value, dict) or set(value) != {
+        "id",
+        "recorded_at",
+        "items",
+        "totals",
+    }:
+        raise ValueError
+    recorded = _optional_expiry(value, "recorded_at")
+    items = value["items"]
+    if recorded is None or not isinstance(items, list) or not items:
+        raise ValueError
+    names: list[str] = []
+    weights: list[str] = []
+    for item in items:
+        if not isinstance(item, dict) or set(item) != {
+            "id",
+            "food",
+            "weight_grams",
+            "nutrition",
+        }:
+            raise ValueError
+        food = item["food"]
+        if not isinstance(food, dict) or set(food) != {"id", "name"}:
+            raise ValueError
+        _saved_id(item["id"])
+        _saved_id(food["id"]) if food["id"] is not None else None
+        if not isinstance(food["name"], str):
+            raise ValueError
+        names.append(food["name"])
+        weights.append(_decimal(item["weight_grams"]))
+        _nutrition(item["nutrition"])
+    _nutrition(value["totals"])
+    # The Pi only presents a safe first-item weight; all IDs remain internal.
+    return SavedMealListItem(_saved_id(value["id"]), recorded, tuple(names), weights[0])
+
+
+def _leftover_scan_response(payload: object) -> LeftoverScanResponse:
+    fields = {
+        "id",
+        "meal_id",
+        "analysis_session_id",
+        "original_weight_grams",
+        "remaining_weight_grams",
+        "consumed_weight_grams",
+        "consumed_portion_percentage",
+        "remaining_nutrition",
+        "estimated_consumed_nutrition",
+        "comparison_warnings",
+        "created_at",
+    }
+    try:
+        if not isinstance(payload, dict) or set(payload) != fields:
+            raise ValueError
+        warnings = payload["comparison_warnings"]
+        created = _optional_expiry(payload, "created_at")
+        if created is None or not isinstance(warnings, list):
+            raise ValueError
+        return LeftoverScanResponse(
+            _saved_id(payload["id"]),
+            _saved_id(payload["meal_id"]),
+            _saved_id(payload["analysis_session_id"]),
+            _decimal(payload["original_weight_grams"]),
+            _decimal(payload["remaining_weight_grams"]),
+            _decimal(payload["consumed_weight_grams"]),
+            _decimal(payload["consumed_portion_percentage"]),
+            _nutrition(payload["remaining_nutrition"]),
+            _nutrition(payload["estimated_consumed_nutrition"]),
+            tuple(_leftover_warning(item) for item in warnings),
+            created,
+        )
+    except (TypeError, ValueError, KeyError) as exc:
+        raise MalformedBackendResponseError(
+            "backend returned an invalid leftover scan"
+        ) from exc
+
+
+def _leftover_warning(value: object) -> LeftoverScanWarning:
+    if not isinstance(value, dict) or set(value) != {"nutrient", "code"}:
+        raise ValueError
+    return LeftoverScanWarning(value["nutrient"], value["code"])
 
 
 def _saved_id(value: object) -> int:

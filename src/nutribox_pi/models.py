@@ -180,6 +180,107 @@ class NutritionValues:
                 _validate_decimal_string(value)
 
 
+@dataclass(frozen=True, slots=True)
+class SavedMealListItem:
+    """Compact, renderer-safe representation returned by ``GET /api/meals``."""
+
+    id: int
+    recorded_at: datetime
+    food_names: tuple[str, ...]
+    weight_grams: str
+
+    def __post_init__(self) -> None:
+        _validate_positive_id(self.id)
+        if self.recorded_at.tzinfo is None or self.recorded_at.utcoffset() is None:
+            raise ValueError("saved meal timestamp is invalid")
+        if not self.food_names:
+            raise ValueError("saved meal is invalid")
+        for name in self.food_names:
+            _validate_text(name, maximum=160)
+        _validate_decimal_range(
+            self.weight_grams, positive=True, maximum=Decimal("5000")
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SavedMealPage:
+    meals: tuple[SavedMealListItem, ...]
+    limit: int
+    offset: int
+
+    def __post_init__(self) -> None:
+        for value in (self.limit, self.offset):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError("saved meal page is invalid")
+        if self.limit <= 0:
+            raise ValueError("saved meal page is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class LeftoverScanWarning:
+    nutrient: str
+    code: str
+
+    def __post_init__(self) -> None:
+        if self.code != "remaining_exceeds_original" or self.nutrient not in {
+            "calories",
+            "protein_g",
+            "carbohydrates_g",
+            "fat_g",
+            "fiber_g",
+            "saturated_fat_g",
+            "sugars_g",
+            "sodium_mg",
+            "cholesterol_mg",
+            "omega_3_g",
+            "omega_6_g",
+            "calcium_mg",
+            "potassium_mg",
+            "zinc_mg",
+            "iron_mg",
+            "magnesium_mg",
+            "phosphorus_mg",
+            "vitamin_b6_mg",
+            "niacin_mg",
+            "vitamin_a_mcg_rae",
+            "vitamin_b12_mcg",
+            "vitamin_c_mg",
+            "vitamin_d_mcg",
+            "folate_mcg_dfe",
+        }:
+            raise ValueError("leftover warning is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class LeftoverScanResponse:
+    """Authoritative, server-calculated leftover summary; no Pi calculations."""
+
+    id: int
+    meal_id: int
+    analysis_session_id: int
+    original_weight_grams: str
+    remaining_weight_grams: str
+    consumed_weight_grams: str
+    consumed_portion_percentage: str
+    remaining_nutrition: NutritionValues
+    estimated_consumed_nutrition: NutritionValues
+    comparison_warnings: tuple[LeftoverScanWarning, ...]
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        for value in (self.id, self.meal_id, self.analysis_session_id):
+            _validate_positive_id(value)
+        for value in (
+            self.original_weight_grams,
+            self.remaining_weight_grams,
+            self.consumed_weight_grams,
+            self.consumed_portion_percentage,
+        ):
+            _validate_decimal_string(value)
+        if self.created_at.tzinfo is None or self.created_at.utcoffset() is None:
+            raise ValueError("leftover scan timestamp is invalid")
+
+
 def _validate_decimal_string(value: str) -> None:
     if not isinstance(value, str):
         raise ValueError("nutrition value must be a decimal string or null")

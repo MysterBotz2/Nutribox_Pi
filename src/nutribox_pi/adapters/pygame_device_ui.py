@@ -51,6 +51,7 @@ from nutribox_pi.device_ui import (
     buttons_for,
     scaled_image_size,
 )
+from nutribox_pi.leftover import LeftoverState
 from nutribox_pi.models import AnalysisStatus, CalculatedResponse
 from nutribox_pi.pairing import PairingState, PairingWorkflow, format_countdown
 from nutribox_pi.ports import PreviewCamera
@@ -290,6 +291,7 @@ def _run_loop(
                     _ingredient_verification(workflow),
                     _ingredient_candidates(workflow),
                     getattr(workflow, "save_enabled", False),
+                    getattr(workflow, "leftover_record_enabled", False),
                 )
                 if pressed is not None or action is None:
                     continue
@@ -329,6 +331,7 @@ def _run_loop(
                     _ingredient_verification(workflow),
                     _ingredient_candidates(workflow),
                     getattr(workflow, "save_enabled", False),
+                    getattr(workflow, "leftover_record_enabled", False),
                 )
                 is not active_press.action
             ):
@@ -387,6 +390,10 @@ def _apply_action(
         workflow.continue_from_instruction()
     elif action is UIAction.ANALYZE:
         workflow.analyze()
+    elif action is UIAction.PORTION_ANALYSIS:
+        workflow.open_portion_analysis()
+    elif action is UIAction.SHOW_PORTION_SETUP:
+        workflow.show_portion_setup()
     elif action is UIAction.PROFILE_SETTINGS:
         workflow.open_profile_settings()
     elif action is UIAction.SETTINGS_BACK:
@@ -543,6 +550,28 @@ def _apply_action(
         workflow.show_recognized_foods()
     elif action is UIAction.SAVE_MEAL:
         workflow.save_meal()
+    elif action is UIAction.RECORD_LEFTOVER_SCAN:
+        workflow.record_leftover_scan()
+    elif action is UIAction.ANALYZE_LEFTOVERS:
+        workflow.start_leftover_selection()
+    elif action in {
+        UIAction.SELECT_SAVED_MEAL_0,
+        UIAction.SELECT_SAVED_MEAL_1,
+        UIAction.SELECT_SAVED_MEAL_2,
+        UIAction.SELECT_SAVED_MEAL_3,
+    }:
+        workflow.select_saved_meal(
+            (
+                UIAction.SELECT_SAVED_MEAL_0,
+                UIAction.SELECT_SAVED_MEAL_1,
+                UIAction.SELECT_SAVED_MEAL_2,
+                UIAction.SELECT_SAVED_MEAL_3,
+            ).index(action)
+        )
+    elif action is UIAction.SAVED_MEAL_NEXT:
+        workflow.next_saved_meal_page()
+    elif action is UIAction.SAVED_MEAL_PREVIOUS:
+        workflow.previous_saved_meal_page()
     elif action is UIAction.ANALYZE_AGAIN:
         if image_cache is not None:
             image_cache.clear()
@@ -622,6 +651,12 @@ def _render(
         _render_home(pygame, screen, fonts, workflow)
     elif workflow.screen in {UIScreen.PROFILE_SETTINGS, UIScreen.UNPAIR_CONFIRM}:
         _render_profile_settings(pygame, screen, fonts, workflow)
+    elif workflow.screen is UIScreen.PORTION_ANALYSIS:
+        _render_portion_analysis(pygame, screen, fonts, workflow)
+    elif workflow.screen is UIScreen.SAVED_MEAL_SELECTION:
+        _render_saved_meal_selection(pygame, screen, fonts, workflow)
+    elif workflow.screen is UIScreen.LEFTOVER_SUMMARY:
+        _render_leftover_summary(pygame, screen, fonts, workflow)
     elif workflow.screen in {UIScreen.CAPTURE, UIScreen.CAPTURING}:
         _render_capture(pygame, screen, fonts, workflow, preview)
     elif workflow.screen is UIScreen.REVIEW:
@@ -660,6 +695,7 @@ def _render(
         _ingredient_verification(workflow),
         _ingredient_candidates(workflow),
         getattr(workflow, "save_enabled", False),
+        getattr(workflow, "leftover_record_enabled", False),
     ):
         button = _localized_button(button, workflow)
         _draw_button(pygame, screen, fonts.button, button, pressed is button.action)
@@ -940,6 +976,100 @@ def _render_profile_settings(
             _ellipsize(fonts.small, workflow.settings_message, 520),
             (400, 250),
             SECONDARY_TEXT,
+        )
+
+
+def _render_portion_analysis(
+    pygame: Any, screen: Any, fonts: _Fonts, workflow: MealCaptureWorkflow
+) -> None:
+    language = workflow.language
+    _draw_text(
+        screen,
+        fonts.subheading,
+        text(language, "portion_analysis"),
+        (400, 48),
+        NUTRIBOX_BLUE,
+    )
+    _draw_card(pygame, screen, (100, 88, 600, 210))
+    message = (
+        "Pair your device to analyze leftovers"
+        if workflow.pairing is None or workflow.pairing.state is not PairingState.PAIRED
+        else text(language, "portion_status")
+    )
+    _draw_text(
+        screen,
+        fonts.small,
+        _ellipsize(fonts.small, message, 540),
+        (400, 165),
+        SECONDARY_TEXT,
+    )
+
+
+def _render_saved_meal_selection(
+    pygame: Any, screen: Any, fonts: _Fonts, workflow: MealCaptureWorkflow
+) -> None:
+    _draw_text(screen, fonts.subheading, "Select Saved Meal", (400, 44), NUTRIBOX_BLUE)
+    view = workflow.leftovers.selection_view
+    if workflow.leftovers.state is LeftoverState.EMPTY:
+        _draw_text(
+            screen,
+            fonts.body,
+            "No saved meals are available.",
+            (400, 210),
+            SECONDARY_TEXT,
+        )
+        return
+    if workflow.leftovers.state in {LeftoverState.RETRYABLE_ERROR, LeftoverState.ERROR}:
+        _draw_text(
+            screen,
+            fonts.body,
+            "Saved meals are unavailable. Try again.",
+            (400, 210),
+            SECONDARY_TEXT,
+        )
+        return
+    for index, name in enumerate(view.names):
+        y = 119 + index * 58
+        _draw_text(
+            screen,
+            fonts.small,
+            _ellipsize(fonts.small, name, 400),
+            (395, y),
+            PRIMARY_TEXT,
+        )
+        _draw_text(
+            screen,
+            fonts.small,
+            f"{view.timestamps[index]} · {view.weights[index]} g",
+            (395, y + 19),
+            SECONDARY_TEXT,
+        )
+
+
+def _render_leftover_summary(
+    pygame: Any, screen: Any, fonts: _Fonts, workflow: MealCaptureWorkflow
+) -> None:
+    _draw_text(screen, fonts.subheading, "Leftover Summary", (400, 42), NUTRIBOX_BLUE)
+    summary = workflow.leftovers.summary
+    if summary is None:
+        return
+    _draw_card(pygame, screen, (70, 86, 660, 274))
+    rows = (
+        ("Original weight", summary.original_weight_grams),
+        ("Remaining weight", summary.remaining_weight_grams),
+        ("Consumed weight", summary.consumed_weight_grams),
+        ("Portion consumed", summary.consumed_portion_percentage + "%"),
+    )
+    for index, (label, value) in enumerate(rows):
+        _draw_text(screen, fonts.body, label, (250, 126 + index * 50), PRIMARY_TEXT)
+        _draw_text(screen, fonts.body, value, (545, 126 + index * 50), SECONDARY_TEXT)
+    if summary.comparison_warnings:
+        _draw_text(
+            screen,
+            fonts.small,
+            "Nutrition comparison needs attention.",
+            (400, 330),
+            DANGER,
         )
 
 

@@ -242,9 +242,7 @@ def test_preview_session_uses_exact_configuration_frames_and_one_camera(
     [
         SimpleNamespace(shape=(360, 640, 3), dtype="uint16", tobytes=lambda: b""),
         SimpleNamespace(shape=(360, 640, 4), dtype="uint8", tobytes=lambda: b""),
-        SimpleNamespace(
-            shape=(360, 640, 3), dtype="uint8", tobytes=lambda: b"short"
-        ),
+        SimpleNamespace(shape=(360, 640, 3), dtype="uint8", tobytes=lambda: b"short"),
     ],
 )
 def test_preview_frame_validation_rejects_invalid_arrays(frame: object) -> None:

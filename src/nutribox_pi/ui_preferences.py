@@ -20,7 +20,7 @@ class Theme(StrEnum):
     DARK = "dark"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class UIPreferences:
     schema_version: int = 2
     language: Language = Language.ENGLISH

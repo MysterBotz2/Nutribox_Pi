@@ -20,9 +20,7 @@ from nutribox_pi.models import (
 from nutribox_pi.ports import Camera
 
 CheckStatus = Literal["pass", "fail", "skipped"]
-_SAFE_VERSION_CHARACTERS = frozenset(
-    string.ascii_letters + string.digits + ".+_-~:"
-)
+_SAFE_VERSION_CHARACTERS = frozenset(string.ascii_letters + string.digits + ".+_-~:")
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,9 +261,7 @@ def _safe_capture_message(code: CameraCode, result: CaptureResult) -> str:
             "Image was published, but private temporary cleanup failed.",
         }
         return (
-            result.message
-            if result.message in permitted
-            else PRIVATE_CLEANUP_MESSAGE
+            result.message if result.message in permitted else PRIVATE_CLEANUP_MESSAGE
         )
     return CAMERA_MESSAGES.get(code, "Camera capture failed.")
 

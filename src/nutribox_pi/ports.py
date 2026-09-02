@@ -14,12 +14,14 @@ from nutribox_pi.models import (
     HealthResult,
     IngredientCandidateSelection,
     IngredientVerification,
+    LeftoverScanResponse,
     MealAnalysisResponse,
     MealAnalysisSelection,
     PairingSession,
     PairingStatusResponse,
     PersonalRecipeSelection,
     PreviewFrame,
+    SavedMealPage,
 )
 
 
@@ -101,6 +103,21 @@ class Backend(Protocol):
     def save_meal(
         self, analysis_session_id: int, device_token: str | None = None
     ) -> object: ...
+
+    def list_saved_meals(
+        self, limit: int, offset: int, device_token: str | None = None
+    ) -> SavedMealPage: ...
+
+    def get_saved_meal(
+        self, meal_id: int, device_token: str | None = None
+    ) -> object: ...
+
+    def create_leftover_scan(
+        self,
+        meal_id: int,
+        analysis_session_id: int,
+        device_token: str | None = None,
+    ) -> LeftoverScanResponse: ...
 
 
 class VerifiedDeviceCredentialProvider(Protocol):

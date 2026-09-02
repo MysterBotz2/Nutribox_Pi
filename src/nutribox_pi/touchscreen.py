@@ -15,6 +15,14 @@ class TouchRect:
     width: int
     height: int
 
+    @property
+    def center_x(self) -> int:
+        return self.x + self.width // 2
+
+    @property
+    def center_y(self) -> int:
+        return self.y + self.height // 2
+
     def contains(self, x: float, y: float) -> bool:
         return self.x <= x < self.x + self.width and self.y <= y < self.y + self.height
 
@@ -66,4 +74,3 @@ class TouchscreenProgress:
 class TouchscreenCheckResult:
     ok: bool
     message: str
-

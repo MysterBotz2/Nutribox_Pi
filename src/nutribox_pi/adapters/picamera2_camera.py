@@ -69,9 +69,7 @@ class Picamera2Camera(SafeCameraAdapter):
         try:
             cameras = picamera_class.global_camera_info()
         except Exception:
-            return self._unavailable(
-                CameraCode.CAMERA_INITIALIZATION_FAILED, versions
-            )
+            return self._unavailable(CameraCode.CAMERA_INITIALIZATION_FAILED, versions)
         if self._compatible_index(cameras) is None:
             return self._unavailable(CameraCode.CAMERA_UNAVAILABLE, versions)
         return CameraAvailability(
@@ -125,9 +123,7 @@ class Picamera2Camera(SafeCameraAdapter):
             except CaptureFailure:
                 raise
             except Exception as exc:
-                raise CaptureFailure(
-                    CameraCode.CAMERA_INITIALIZATION_FAILED
-                ) from exc
+                raise CaptureFailure(CameraCode.CAMERA_INITIALIZATION_FAILED) from exc
 
             self._autofocus(camera)
             try:
@@ -256,9 +252,7 @@ class Picamera2Camera(SafeCameraAdapter):
         return None
 
     @staticmethod
-    def _load_stack() -> (
-        tuple[Any, Any, tuple[str, str]] | CameraAvailability
-    ):
+    def _load_stack() -> tuple[Any, Any, tuple[str, str]] | CameraAvailability:
         try:
             module = importlib.import_module("picamera2")
             libcamera = importlib.import_module("libcamera")
@@ -282,9 +276,7 @@ class Picamera2Camera(SafeCameraAdapter):
         return picamera_class, libcamera, versions
 
     @staticmethod
-    def _unavailable(
-        code: CameraCode, versions: tuple[str, str]
-    ) -> CameraAvailability:
+    def _unavailable(code: CameraCode, versions: tuple[str, str]) -> CameraAvailability:
         return CameraAvailability(
             False,
             code,

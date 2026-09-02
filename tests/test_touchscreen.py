@@ -110,9 +110,7 @@ class FakePygame:
     ) -> None:
         self.events = events
         self.initialization_error = initialization_error
-        self.display = FakeDisplay(
-            resolution, initialization_error=display_error
-        )
+        self.display = FakeDisplay(resolution, initialization_error=display_error)
         self.font = SimpleNamespace(Font=lambda name, size: FakeFont())
         self.draw = SimpleNamespace(rect=lambda *args, **kwargs: None)
         self.event = SimpleNamespace(get=self._events)
@@ -186,9 +184,7 @@ def test_runtime_early_exit_returns_failure(
 def test_runtime_rejects_incorrect_resolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    result = _run_with_fake(
-        monkeypatch, FakePygame([], resolution=(1024, 768))
-    )
+    result = _run_with_fake(monkeypatch, FakePygame([], resolution=(1024, 768)))
 
     assert result.ok is False
     assert result.message == "Touchscreen check unavailable."

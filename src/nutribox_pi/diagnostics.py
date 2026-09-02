@@ -99,9 +99,7 @@ class DiagnosticsService:
             name="backend",
             passed=backend_passed,
             message=(
-                "Backend is reachable."
-                if backend_passed
-                else "Backend is unreachable."
+                "Backend is reachable." if backend_passed else "Backend is unreachable."
             ),
         )
         return DiagnosticReport(

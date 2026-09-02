@@ -23,9 +23,7 @@ class UnavailableCamera:
             "unknown",
         )
 
-    def capture(
-        self, output_path: Path, overwrite: bool = False
-    ) -> CaptureResult:
+    def capture(self, output_path: Path, overwrite: bool = False) -> CaptureResult:
         raise AssertionError("capture must be skipped")
 
 
@@ -102,7 +100,7 @@ def test_capture_success_human_output_escapes_basename() -> None:
         1080,
         10,
     )
-    assert 'File: "quote\\\"name.jpg"' in format_camera_capture(result)
+    assert 'File: "quote\\"name.jpg"' in format_camera_capture(result)
 
 
 def test_diagnostics_redacts_adapter_messages_and_stack_metadata() -> None:
@@ -154,9 +152,7 @@ def test_diagnostic_cancellation_is_reraised_after_cleanup() -> None:
                 "not-applicable",
             )
 
-        def capture(
-            self, output_path: Path, overwrite: bool = False
-        ) -> CaptureResult:
+        def capture(self, output_path: Path, overwrite: bool = False) -> CaptureResult:
             self.output = output_path
             output_path.write_bytes(b"private image")
             raise KeyboardInterrupt

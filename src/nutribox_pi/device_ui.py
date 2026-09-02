@@ -16,6 +16,7 @@ from nutribox_pi.continuation import (
     SaveState,
 )
 from nutribox_pi.controller import NutriBoxController
+from nutribox_pi.leftover import LeftoverState, LeftoverWorkflow
 from nutribox_pi.models import (
     AnalysisStatus,
     IngredientVerification,
@@ -34,7 +35,7 @@ from nutribox_pi.ports import (
 )
 from nutribox_pi.touchscreen import TouchRect
 from nutribox_pi.ui_preferences import Language, Theme
-from nutribox_pi.ui_shell import MILESTONES, StartupShell
+from nutribox_pi.ui_shell import MILESTONES, StartupShell, text
 
 DISPLAY_SIZE = (800, 480)
 CAPTURE_FILE_NAME = "meal.jpg"
@@ -79,6 +80,9 @@ class UIScreen(StrEnum):
     LANGUAGE = "language"
     INSTRUCTION = "instruction"
     HOME = "home"
+    PORTION_ANALYSIS = "portion_analysis"
+    SAVED_MEAL_SELECTION = "saved_meal_selection"
+    LEFTOVER_SUMMARY = "leftover_summary"
     CAPTURE = "capture"
     CAPTURING = "capturing"
     REVIEW = "review"
@@ -110,6 +114,7 @@ class UIAction(StrEnum):
     HELP = "help"
     CONTINUE = "continue"
     ANALYZE = "analyze"
+    PORTION_ANALYSIS = "portion_analysis"
     ANALYZE_MEAL = "analyze_meal"
     SHOW_RECOGNIZED_FOODS = "show_recognized_foods"
     SAVE_MEAL = "save_meal"
@@ -170,6 +175,15 @@ class UIAction(StrEnum):
     SETTINGS_TAGALOG = "settings_tagalog"
     TOGGLE_THEME = "toggle_theme"
     SETTINGS_DIAGNOSTICS = "settings_diagnostics"
+    SHOW_PORTION_SETUP = "show_portion_setup"
+    ANALYZE_LEFTOVERS = "analyze_leftovers"
+    SELECT_SAVED_MEAL_0 = "select_saved_meal_0"
+    SELECT_SAVED_MEAL_1 = "select_saved_meal_1"
+    SELECT_SAVED_MEAL_2 = "select_saved_meal_2"
+    SELECT_SAVED_MEAL_3 = "select_saved_meal_3"
+    SAVED_MEAL_NEXT = "saved_meal_next"
+    SAVED_MEAL_PREVIOUS = "saved_meal_previous"
+    RECORD_LEFTOVER_SCAN = "record_leftover_scan"
     UNPAIR = "unpair"
     CONFIRM_UNPAIR = "confirm_unpair"
     CANCEL_UNPAIR = "cancel_unpair"
@@ -299,6 +313,7 @@ def buttons_for(
     ingredient_verification: IngredientVerificationView | None = None,
     ingredient_candidates: IngredientCandidateView | None = None,
     save_enabled: bool = False,
+    leftover_record_enabled: bool = False,
 ) -> tuple[ButtonLayout, ...]:
     if screen is UIScreen.LOADING:
         return ()
@@ -330,7 +345,13 @@ def buttons_for(
             ButtonLayout(
                 UIAction.ANALYZE,
                 "Analyze Meal",
-                TouchRect(210, 250, 380, 68),
+                TouchRect(210, 110, 380, 56),
+            ),
+            ButtonLayout(
+                UIAction.PORTION_ANALYSIS,
+                "Portion Analysis",
+                TouchRect(210, 180, 380, 56),
+                "card",
             ),
             _home_pairing_button(pairing_state),
             ButtonLayout(
@@ -374,6 +395,60 @@ def buttons_for(
                 "danger",
                 pairing_state is PairingState.PAIRED,
             ),
+            EXIT_BUTTON,
+        )
+    if screen is UIScreen.PORTION_ANALYSIS:
+        return (
+            ButtonLayout(UIAction.BACK, "Back", TouchRect(24, 408, 130, 48), "card"),
+            ButtonLayout(
+                UIAction.SHOW_PORTION_SETUP,
+                "Setup info",
+                TouchRect(500, 140, 170, 42),
+                "card",
+            ),
+            ButtonLayout(
+                UIAction.ANALYZE_LEFTOVERS,
+                "Analyze Leftovers",
+                TouchRect(240, 338, 320, 60),
+                "primary",
+                enabled=pairing_state is PairingState.PAIRED,
+            ),
+            ButtonLayout(UIAction.HOME, "Home", TouchRect(640, 408, 128, 48), "card"),
+            EXIT_BUTTON,
+        )
+    if screen is UIScreen.SAVED_MEAL_SELECTION:
+        return (
+            *(
+                ButtonLayout(
+                    action,
+                    f"Meal {index + 1}",
+                    TouchRect(110, 94 + index * 58, 580, 50),
+                    "card",
+                )
+                for index, action in enumerate(
+                    (
+                        UIAction.SELECT_SAVED_MEAL_0,
+                        UIAction.SELECT_SAVED_MEAL_1,
+                        UIAction.SELECT_SAVED_MEAL_2,
+                        UIAction.SELECT_SAVED_MEAL_3,
+                    )
+                )
+            ),
+            ButtonLayout(
+                UIAction.SAVED_MEAL_PREVIOUS,
+                "Previous",
+                TouchRect(180, 380, 160, 56),
+                "card",
+            ),
+            ButtonLayout(
+                UIAction.SAVED_MEAL_NEXT, "Next", TouchRect(460, 380, 160, 56), "card"
+            ),
+            ButtonLayout(UIAction.HOME, "Home", TouchRect(24, 408, 128, 48), "card"),
+            EXIT_BUTTON,
+        )
+    if screen is UIScreen.LEFTOVER_SUMMARY:
+        return (
+            ButtonLayout(UIAction.HOME, "Home", TouchRect(336, 404, 128, 56), "card"),
             EXIT_BUTTON,
         )
     if screen is UIScreen.UNPAIR_CONFIRM:
@@ -424,7 +499,9 @@ def buttons_for(
             EXIT_BUTTON,
         )
     if screen is UIScreen.CALCULATED:
-        return _calculated_buttons(nutrition_view or NutritionView(), save_enabled)
+        return _calculated_buttons(
+            nutrition_view or NutritionView(), save_enabled, leftover_record_enabled
+        )
     if screen is UIScreen.FOOD_SELECTION:
         return _food_selection_buttons(
             food_selection or FoodSelectionView((), 0, None, False, False)
@@ -545,7 +622,9 @@ def _food_selection_buttons(view: FoodSelectionView) -> tuple[ButtonLayout, ...]
 
 
 def _calculated_buttons(
-    view: NutritionView, save_enabled: bool = False
+    view: NutritionView,
+    save_enabled: bool = False,
+    leftover_record_enabled: bool = False,
 ) -> tuple[ButtonLayout, ...]:
     tab_actions = (
         UIAction.NUTRITION_OVERVIEW,
@@ -590,6 +669,18 @@ def _calculated_buttons(
         ButtonLayout(UIAction.HOME, "Home", TouchRect(550, 400, 110, 60)),
         ButtonLayout(UIAction.EXIT, "Exit", TouchRect(670, 400, 110, 60), "danger"),
     )
+    if leftover_record_enabled:
+        return tabs + (
+            actions[0],
+            actions[1],
+            actions[2],
+            ButtonLayout(
+                UIAction.RECORD_LEFTOVER_SCAN,
+                "Record Leftover Scan",
+                TouchRect(260, 400, 160, 60),
+            ),
+            *actions[3:],
+        )
     if not save_enabled:
         return tabs + actions
     return tabs + (
@@ -879,6 +970,7 @@ def action_at(
     ingredient_verification: IngredientVerificationView | None = None,
     ingredient_candidates: IngredientCandidateView | None = None,
     save_enabled: bool = False,
+    leftover_record_enabled: bool = False,
 ) -> UIAction | None:
     for button in buttons_for(
         screen,
@@ -888,6 +980,7 @@ def action_at(
         ingredient_verification,
         ingredient_candidates,
         save_enabled,
+        leftover_record_enabled,
     ):
         if button.enabled and button.rectangle.contains(x, y):
             return button.action
@@ -980,6 +1073,8 @@ class MealCaptureWorkflow:
         # The continuation workflow, not the renderer, owns active backend
         # session data.  PI-3B3-B will add the corresponding controls.
         self.continuation = MealAnalysisContinuationWorkflow(controller)
+        self.leftovers = LeftoverWorkflow(controller)
+        self.leftover_mode = False
         self._store = store or TemporaryCaptureStore()
         self.simulated_weight = simulated_weight
         self.simulated_camera = bool(getattr(camera, "is_simulated", False))
@@ -1007,6 +1102,7 @@ class MealCaptureWorkflow:
             (), (), 0, 0, None, False, False
         )
         self._nutrition_view = NutritionView()
+        self.portion_setup_message: str | None = None
         self._meal_generation = 0
         self._analysis_started_paired = False
 
@@ -1052,6 +1148,58 @@ class MealCaptureWorkflow:
         self.settings_message = None
         self.screen = UIScreen.PROFILE_SETTINGS
 
+    def open_portion_analysis(self) -> None:
+        self.leftover_mode = False
+        self.leftovers.open(self._paired_and_verified())
+        self.screen = UIScreen.PORTION_ANALYSIS
+
+    def start_leftover_selection(self) -> None:
+        if self.leftovers.state is LeftoverState.GUEST:
+            return
+        if self.leftovers.state in {LeftoverState.RETRYABLE_ERROR, LeftoverState.ERROR}:
+            self.leftovers.load(0)
+        if self.leftovers.state is LeftoverState.SELECTING:
+            self.screen = UIScreen.SAVED_MEAL_SELECTION
+
+    def select_saved_meal(self, ordinal: int) -> None:
+        if self.leftovers.select(ordinal):
+            self.leftover_mode = True
+            self.analyze()
+
+    def next_saved_meal_page(self) -> None:
+        view = self.leftovers.selection_view
+        if view.has_next:
+            self.leftovers.load((view.page + 1) * self.leftovers.page_size)
+
+    def previous_saved_meal_page(self) -> None:
+        view = self.leftovers.selection_view
+        if view.page:
+            self.leftovers.load((view.page - 1) * self.leftovers.page_size)
+
+    @property
+    def leftover_record_enabled(self) -> bool:
+        return (
+            self.leftover_mode
+            and self.screen is UIScreen.CALCULATED
+            and self.leftovers.selected_meal_id is not None
+            and self.continuation.response is not None
+            and self.continuation.response.analysis_session_id is not None
+            and self._paired_and_verified()
+            and self.leftovers.state is not LeftoverState.SUMMARY
+        )
+
+    def record_leftover_scan(self) -> None:
+        response = self.continuation.response
+        if not self.leftover_record_enabled or response is None:
+            return
+        self.leftovers.record(response.analysis_session_id)
+        if self.leftovers.state is LeftoverState.SUMMARY:
+            self.screen = UIScreen.LEFTOVER_SUMMARY
+        elif self.leftovers.state is LeftoverState.REVOKED:
+            if self.pairing is not None:
+                self.pairing.confirm_revocation()
+            self.home()
+
     def settings_back(self) -> None:
         self.settings_message = None
         self.screen = UIScreen.HOME
@@ -1088,6 +1236,9 @@ class MealCaptureWorkflow:
 
     def continue_from_instruction(self) -> None:
         self.screen = UIScreen.HOME
+
+    def show_portion_setup(self) -> None:
+        self.portion_setup_message = text(self.language, "portion_setup")
 
     def start_pairing(self) -> None:
         if self.pairing is not None and self.pairing.start():
@@ -1480,6 +1631,9 @@ class MealCaptureWorkflow:
             self.screen = UIScreen.LANGUAGE
             return
         if self._close_preview() and self._cleanup_or_error():
+            if self.leftover_mode:
+                self.leftovers.clear()
+                self.leftover_mode = False
             self._clear_analysis_state()
             self.error_message = None
             self.screen = UIScreen.HOME
@@ -1590,7 +1744,8 @@ class MealCaptureWorkflow:
             return
         if isinstance(result, MealAnalysisResponse):
             self.continuation.accept_initial_response(
-                result, save_permitted=self._analysis_started_paired
+                result,
+                save_permitted=self._analysis_started_paired and not self.leftover_mode,
             )
             self._show_analysis_response(result)
         else:
@@ -1601,6 +1756,9 @@ class MealCaptureWorkflow:
 
     def retake(self) -> None:
         if self._cleanup_or_error():
+            if self.leftover_mode:
+                self.leftovers.clear()
+                self.leftover_mode = False
             self._clear_analysis_state()
             self.error_message = None
             self._start_preview()
@@ -1617,6 +1775,7 @@ class MealCaptureWorkflow:
     def save_enabled(self) -> bool:
         return (
             self.screen is UIScreen.CALCULATED
+            and not self.leftover_mode
             and self._analysis_started_paired
             and self._paired_and_verified()
             and self.continuation.save_state is SaveState.READY
@@ -1657,6 +1816,9 @@ class MealCaptureWorkflow:
             self.screen = UIScreen.HOME
             self._clear_analysis_state()
             self.error_message = None
+            self._clear_placeholder_state()
+            self.leftover_mode = False
+            self.leftovers.clear()
 
     def close(self) -> UIResult:
         if self.pairing is not None:
@@ -1669,6 +1831,8 @@ class MealCaptureWorkflow:
             self.error_message = CLEANUP_ERROR
             return UIResult(False, CLEANUP_ERROR)
         self._clear_analysis_state()
+        self.leftover_mode = False
+        self.leftovers.clear()
         return UIResult(True, UI_CLOSED)
 
     def preview_frame(self) -> PreviewFrame | None:
@@ -1711,6 +1875,9 @@ class MealCaptureWorkflow:
         self.captured_weight_grams = None
         self.analysis_retry_available = False
         self._advance_meal_generation()
+
+    def _clear_placeholder_state(self) -> None:
+        self.portion_setup_message = None
 
     def _clear_analysis_state(self) -> None:
         self._advance_meal_generation()

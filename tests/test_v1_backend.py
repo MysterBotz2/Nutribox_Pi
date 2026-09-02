@@ -71,15 +71,15 @@ def test_health_accepts_any_successful_body_without_parsing() -> None:
     session = FakeSession(response)
 
     result = V1BackendClient(
-        "https://backend.test/", 2, session=session  # type: ignore[arg-type]
+        "https://backend.test/",
+        2,
+        session=session,  # type: ignore[arg-type]
     ).health()
 
     assert result.healthy is True
     assert result.payload == {}
     assert response.json_called is False
-    assert session.calls == [
-        ("GET", "https://backend.test/api/health", {"timeout": 2})
-    ]
+    assert session.calls == [("GET", "https://backend.test/api/health", {"timeout": 2})]
 
 
 def _payload(status: AnalysisStatus) -> dict[str, object]:
@@ -99,6 +99,57 @@ def _payload(status: AnalysisStatus) -> dict[str, object]:
         }
         payload["weight_grams"] = "123.5"
     return payload
+
+
+def _portion_nutrition() -> dict[str, str]:
+    return {
+        "calories": "100",
+        "protein_g": "2",
+        "carbohydrates_g": "20",
+        "fat_g": "1",
+        "fiber_g": "3",
+    }
+
+
+def test_leftover_routes_use_only_device_header_and_exact_scan_body() -> None:
+    scan = {
+        "id": 8,
+        "meal_id": 3,
+        "analysis_session_id": 9,
+        "original_weight_grams": "120",
+        "remaining_weight_grams": "40",
+        "consumed_weight_grams": "80",
+        "consumed_portion_percentage": "66.7",
+        "remaining_nutrition": _portion_nutrition(),
+        "estimated_consumed_nutrition": _portion_nutrition(),
+        "comparison_warnings": [],
+        "created_at": "2026-09-02T00:00:00Z",
+    }
+    session = FakeSession(FakeResponse(scan, status_code=201))
+    client = V1BackendClient("https://backend.test", 2, session=session)  # type: ignore[arg-type]
+
+    result = client.create_leftover_scan(3, 9, "verified-device-token")
+
+    assert result.remaining_weight_grams == "40"
+    assert session.calls == [
+        (
+            "POST",
+            "https://backend.test/api/meals/3/leftover-scans",
+            {
+                "timeout": 2,
+                "json": {"analysis_session_id": 9},
+                "headers": {"X-Device-Token": "verified-device-token"},
+            },
+        )
+    ]
+
+
+def test_saved_meal_list_requires_verified_credential_before_http() -> None:
+    session = FakeSession()
+    client = V1BackendClient("https://backend.test", 2, session=session)  # type: ignore[arg-type]
+    with pytest.raises(BackendError, match="verified device credential"):
+        client.list_saved_meals(4, 0)
+    assert session.calls == []
 
 
 @pytest.mark.parametrize(
@@ -121,7 +172,9 @@ def test_analyze_accepts_exactly_documented_statuses(
     image.write_bytes(b"jpeg-data")
 
     result = V1BackendClient(
-        "https://backend.test", 2, session=session  # type: ignore[arg-type]
+        "https://backend.test",
+        2,
+        session=session,  # type: ignore[arg-type]
     ).analyze_meal(image, 123.5)
 
     method, url, kwargs = session.calls[0]
@@ -144,9 +197,7 @@ def test_analyze_accepts_exactly_documented_statuses(
 
 
 @pytest.mark.parametrize("status", ["unknown", "", None])
-def test_analyze_rejects_undocumented_status(
-    tmp_path: Path, status: object
-) -> None:
+def test_analyze_rejects_undocumented_status(tmp_path: Path, status: object) -> None:
     session = FakeSession(
         FakeResponse(
             {
@@ -161,7 +212,9 @@ def test_analyze_rejects_undocumented_status(
 
     with pytest.raises(BackendError, match="invalid analysis response"):
         V1BackendClient(
-            "https://backend.test", 2, session=session  # type: ignore[arg-type]
+            "https://backend.test",
+            2,
+            session=session,  # type: ignore[arg-type]
         ).analyze_meal(image, 10)
 
 
@@ -194,7 +247,8 @@ def test_request_error_is_normalized() -> None:
 
     with pytest.raises(BackendError, match="request failed"):
         V1BackendClient(
-            "https://backend.test", session=session  # type: ignore[arg-type]
+            "https://backend.test",
+            session=session,  # type: ignore[arg-type]
         ).health()
 
 
@@ -203,7 +257,8 @@ def test_health_rejects_non_2xx_response() -> None:
 
     with pytest.raises(BackendError, match="HTTP 302"):
         V1BackendClient(
-            "https://backend.test", session=session  # type: ignore[arg-type]
+            "https://backend.test",
+            session=session,  # type: ignore[arg-type]
         ).health()
 
 
@@ -215,7 +270,8 @@ def test_invalid_analysis_json_is_normalized(tmp_path: Path) -> None:
 
     with pytest.raises(BackendError, match="invalid JSON"):
         V1BackendClient(
-            "https://backend.test", session=session  # type: ignore[arg-type]
+            "https://backend.test",
+            session=session,  # type: ignore[arg-type]
         ).analyze_meal(image, 10)
 
 
@@ -350,7 +406,8 @@ def _current_calculated_selection_payload() -> dict[str, object]:
 def test_selection_calculated_response_parses_current_authoritative_schema() -> None:
     session = FakeSession(FakeResponse(_current_calculated_selection_payload()))
     client = V1BackendClient(
-        "https://backend.test", session=session  # type: ignore[arg-type]
+        "https://backend.test",
+        session=session,  # type: ignore[arg-type]
     )
 
     result = client.select_food_component(
@@ -363,9 +420,9 @@ def test_selection_calculated_response_parses_current_authoritative_schema() -> 
     assert isinstance(result, MealAnalysisResponse)
     assert result.recognition_source.value == "session"
     assert result.weight_grams == "250.000"
-    assert result.nutrition.values == _current_calculated_selection_payload()[
-        "nutrition"
-    ]
+    assert (
+        result.nutrition.values == _current_calculated_selection_payload()["nutrition"]
+    )
     assert result.nutrition.values["energy_kj"] == "418.400"
     assert result.nutrition.values["phosphorus_mg"] == "12.000"
     assert result.nutrition.values["vitamin_b6_mg"] == "13.000"

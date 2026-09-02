@@ -16,7 +16,7 @@ def test_camera_scripts_are_executable_and_do_not_modify_pi1a_environment() -> N
     assert "$PROJECT_DIR/.venv/bin/python" in setup_text
     assert "rm " not in setup_text
     assert ".venv-pi/bin/python" in smoke_text
-    assert "exec \"$VENV_PYTHON\" -m nutribox_pi camera-check" in smoke_text
+    assert 'exec "$VENV_PYTHON" -m nutribox_pi camera-check' in smoke_text
     assert "NUTRIBOX_API_BASE_URL" not in smoke_text
 
 
