@@ -1231,3 +1231,15 @@ def test_device_ui_launcher_uses_existing_pi_environment_and_wayland_logic() -> 
     assert "sudo" not in text
     assert 'exec "$VENV_PYTHON" -m nutribox_pi ui' in text
     assert ".venv/bin/python" not in text
+
+
+def test_autostart_launcher_is_reversible_and_uses_a_quoted_exec_path() -> None:
+    script = Path("scripts/configure_ui_autostart.sh")
+    text = script.read_text()
+
+    assert script.stat().st_mode & 0o111
+    assert "systemctl --user enable --now" in text
+    assert "systemctl --user disable --now" in text
+    assert 'ExecStart="%s"' in text
+    assert "systemd-escape" not in text
+    assert "sudo" not in text

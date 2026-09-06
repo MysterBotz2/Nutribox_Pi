@@ -26,7 +26,14 @@ from nutribox_pi.camera_diagnostics import (
     format_camera_check,
 )
 from nutribox_pi.camera_factory import camera_from_env
-from nutribox_pi.config import ConfigurationError, Settings
+from nutribox_pi.config import (
+    CameraConfigurationError,
+    CameraSettings,
+    ConfigurationError,
+    Settings,
+    WeightConfigurationError,
+    WeightSettings,
+)
 from nutribox_pi.controller import NutriBoxController
 from nutribox_pi.device_ui import ANALYSIS_ERROR
 from nutribox_pi.diagnostics import DiagnosticsService, format_human_report
@@ -38,6 +45,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nutribox-pi")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("health", help="check the v1 backend health endpoint")
+    subparsers.add_parser(
+        "preflight", help="validate safe device configuration before starting the UI"
+    )
     diagnostics_parser = subparsers.add_parser(
         "diagnostics", help="run safe device diagnostics"
     )
@@ -68,6 +78,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     subparsers.add_parser("ui", help="run the local meal-capture interface")
     args = parser.parse_args(argv)
+
+    if args.command == "preflight":
+        try:
+            Settings.from_env()
+            CameraSettings.from_env()
+            WeightSettings.from_env()
+        except (
+            CameraConfigurationError,
+            ConfigurationError,
+            WeightConfigurationError,
+        ):
+            print("Device configuration is invalid.", file=sys.stderr)
+            return 1
+        print("Device configuration is valid.")
+        return 0
 
     if args.command == "ui":
         try:
@@ -163,8 +188,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = controller.check_backend()
             print(json.dumps(result.payload, sort_keys=True))
             return 0 if result.healthy else 1
-    except (BackendError, ConfigurationError) as exc:
-        print(f"health check failed: {exc}", file=sys.stderr)
+    except (BackendError, ConfigurationError):
+        print("Health check failed.", file=sys.stderr)
         return 1
     return 2
 

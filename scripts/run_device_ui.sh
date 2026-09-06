@@ -27,6 +27,9 @@ fi
 [ "${NUTRIBOX_CAMERA_ADAPTER:-}" = "picamera2" ] ||
     die "NUTRIBOX_CAMERA_ADAPTER must be picamera2"
 
+"$VENV_PYTHON" -m nutribox_pi preflight >/dev/null 2>&1 ||
+    die "device configuration is invalid"
+
 if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
     RUNTIME_CANDIDATE="/run/user/$(id -u)"
     if [ -d "$RUNTIME_CANDIDATE" ] && [ -O "$RUNTIME_CANDIDATE" ]; then
@@ -61,5 +64,15 @@ if [ -n "${WAYLAND_DISPLAY:-}" ]; then
     [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ] ||
         die "the selected Wayland session socket is unavailable"
 fi
+
+command -v flock >/dev/null 2>&1 ||
+    die "flock is required to prevent duplicate UI processes"
+[ -n "${XDG_RUNTIME_DIR:-}" ] ||
+    die "no safe runtime directory is available for the UI process lock"
+[ -d "$XDG_RUNTIME_DIR" ] && [ -O "$XDG_RUNTIME_DIR" ] ||
+    die "the UI runtime directory is unavailable or unsafe"
+LOCK_FILE="$XDG_RUNTIME_DIR/nutribox-pi-ui.lock"
+exec 9>"$LOCK_FILE" || die "could not create the UI process lock"
+flock -n 9 || die "another Nutri-Box UI process is already running"
 
 exec "$VENV_PYTHON" -m nutribox_pi ui

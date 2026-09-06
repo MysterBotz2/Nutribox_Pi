@@ -66,7 +66,7 @@ def test_cli_health_failure(
     monkeypatch.setattr(cli, "_controller", lambda settings: FakeController(error))
 
     assert cli.main(["health"]) == 1
-    assert "health check failed" in capsys.readouterr().err
+    assert capsys.readouterr().err == "Health check failed.\n"
 
 
 def test_cli_reports_missing_required_url(
@@ -75,7 +75,31 @@ def test_cli_reports_missing_required_url(
     monkeypatch.delenv("NUTRIBOX_API_BASE_URL", raising=False)
 
     assert cli.main(["health"]) == 1
-    assert "NUTRIBOX_API_BASE_URL is required" in capsys.readouterr().err
+    assert capsys.readouterr().err == "Health check failed.\n"
+
+
+def test_cli_preflight_accepts_complete_explicit_configuration(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("NUTRIBOX_API_BASE_URL", "https://backend.test")
+    monkeypatch.setenv("NUTRIBOX_CAMERA_ADAPTER", "simulated")
+    monkeypatch.setenv("NUTRIBOX_WEIGHT_ADAPTER", "simulated")
+
+    assert cli.main(["preflight"]) == 0
+    assert capsys.readouterr().out == "Device configuration is valid.\n"
+
+
+def test_cli_preflight_normalizes_configuration_failure(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("NUTRIBOX_API_BASE_URL", "https://token@example.test")
+    monkeypatch.setenv("NUTRIBOX_CAMERA_ADAPTER", "not-a-camera")
+    monkeypatch.setenv("NUTRIBOX_WEIGHT_ADAPTER", "simulated")
+
+    assert cli.main(["preflight"]) == 1
+    output = capsys.readouterr().err
+    assert output == "Device configuration is invalid.\n"
+    assert "token" not in output
 
 
 def test_cli_diagnostics_human_output_and_success_exit(

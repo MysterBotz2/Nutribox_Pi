@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib
+import signal
 import sys
+import threading
 import time
 from contextlib import suppress
 from dataclasses import dataclass
@@ -103,7 +105,18 @@ def run_device_ui(
     workflow: MealCaptureWorkflow | None = None
     outcome = UIResult(False, DISPLAY_ERROR)
     cleanup_result = UIResult(True, UI_CLOSED)
+    previous_sigterm: Any | None = None
+    termination_requested = False
+
+    def _handle_termination(_signum: int, _frame: Any) -> None:
+        nonlocal termination_requested
+        termination_requested = True
+        raise KeyboardInterrupt
+
     try:
+        if threading.current_thread() is threading.main_thread():
+            previous_sigterm = signal.getsignal(signal.SIGTERM)
+            signal.signal(signal.SIGTERM, _handle_termination)
         pygame.init()
         pygame.display.init()
         if not pygame.display.get_init():
@@ -133,6 +146,10 @@ def run_device_ui(
             StartupShell(preference_store or UIPreferenceStore()),
         )
         outcome = _run_loop(pygame, screen, fonts, workflow)
+    except KeyboardInterrupt:
+        if not termination_requested:
+            raise
+        outcome = UIResult(True, UI_CLOSED)
     except Exception:
         outcome = UIResult(False, DISPLAY_ERROR)
     finally:
@@ -140,6 +157,8 @@ def run_device_ui(
             cleanup_result = workflow.close()
         with suppress(Exception):
             pygame.quit()
+        if previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, previous_sigterm)
     if not cleanup_result.ok:
         return cleanup_result
     return outcome

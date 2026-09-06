@@ -11,6 +11,9 @@ requirements.
 For manual Raspberry Pi setup and device diagnostics, see
 [docs/PI1_DEPLOYMENT.md](docs/PI1_DEPLOYMENT.md).
 
+For the current release-candidate Pi installation, hardware validation, and
+reversible graphical-session autostart, see [docs/PI5_DEPLOYMENT.md](docs/PI5_DEPLOYMENT.md).
+
 ## Development
 
 Requires Python 3.11 or newer.
@@ -43,5 +46,5 @@ reached or does not return a successful HTTP response.
 - `V1BackendClient` supports the known health and multipart meal-analysis
   endpoints. Analysis sends only `file` and `weight_grams`.
 
-No real camera, touchscreen, GPIO, sensor, heater, profile, pairing, auth,
-synchronization, telemetry, offline, or persistence behavior is implemented.
+The release candidate supports the approved camera, touchscreen, HX711 load
+cell, pairing, save, and paired leftover workflows. Reheating remains excluded.
