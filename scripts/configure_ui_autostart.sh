@@ -9,65 +9,87 @@ die() {
 
 [ "$(uname -s 2>/dev/null || true)" = "Linux" ] ||
     die "this script requires Linux"
-command -v systemctl >/dev/null 2>&1 ||
-    die "systemctl is required"
 
 PROJECT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)" ||
     die "could not resolve the project directory"
 LAUNCHER="$PROJECT_DIR/scripts/run_device_ui.sh"
-[ -x "$LAUNCHER" ] || die "the device UI launcher is unavailable"
+[ -f "$LAUNCHER" ] || die "the device UI launcher is unavailable"
 
 CONFIG_ROOT="${XDG_CONFIG_HOME:-$HOME/.config}"
+LABWC_DIR="$CONFIG_ROOT/labwc"
+AUTOSTART_PATH="$LABWC_DIR/autostart"
+MANAGED_START="# >>> Nutri-Box Pi managed autostart >>>"
+MANAGED_END="# <<< Nutri-Box Pi managed autostart <<<"
+
 UNIT_DIR="$CONFIG_ROOT/systemd/user"
-UNIT_PATH="$UNIT_DIR/nutribox-pi-ui.service"
 UNIT_NAME="nutribox-pi-ui.service"
+UNIT_PATH="$UNIT_DIR/$UNIT_NAME"
 DEFAULT_WANTS_PATH="$UNIT_DIR/default.target.wants/$UNIT_NAME"
 LEGACY_WANTS_PATH="$UNIT_DIR/graphical-session.target.wants/$UNIT_NAME"
 
+shell_quote() {
+    QUOTED_VALUE="${1//\'/\'\\\'\'}"
+    printf "'%s'" "$QUOTED_VALUE"
+}
+
+remove_managed_labwc_entry() {
+    [ -e "$AUTOSTART_PATH" ] || return 0
+    TEMP_PATH="$(mktemp "$LABWC_DIR/.nutribox-autostart.XXXXXX")" ||
+        die "could not prepare the Labwc autostart update"
+    if ! awk -v start="$MANAGED_START" -v end="$MANAGED_END" '
+        $0 == start {
+            if (inside || seen_start) exit 2
+            inside = 1
+            seen_start = 1
+            next
+        }
+        $0 == end {
+            if (!inside || seen_end) exit 3
+            inside = 0
+            seen_end = 1
+            next
+        }
+        !inside { print }
+        END {
+            if (inside || seen_start != seen_end) exit 4
+        }
+    ' "$AUTOSTART_PATH" >"$TEMP_PATH"; then
+        rm -f -- "$TEMP_PATH"
+        die "the managed Labwc autostart entry is malformed"
+    fi
+    mv -f -- "$TEMP_PATH" "$AUTOSTART_PATH" ||
+        die "could not update the Labwc autostart file"
+}
+
+remove_legacy_systemd_unit() {
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl --user disable --now "$UNIT_NAME" >/dev/null 2>&1 || true
+    fi
+    rm -f -- "$DEFAULT_WANTS_PATH" "$LEGACY_WANTS_PATH" "$UNIT_PATH" ||
+        die "could not remove the obsolete UI service"
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl --user daemon-reload >/dev/null 2>&1 || true
+    fi
+}
+
 case "${1:-enable}" in
     enable)
-        mkdir -p "$UNIT_DIR" || die "could not create the user unit directory"
-        # A previous release installed this unit under graphical-session.target.
-        # Pi OS does not reliably activate that target, so remove only that
-        # exact legacy link before enabling the default-target unit below.
-        rm -f -- "$LEGACY_WANTS_PATH" ||
-            die "could not remove the legacy graphical-session link"
-        # ExecStart accepts a quoted systemd argument. Escape the only
-        # characters that are significant to that syntax; percent must also be
-        # doubled to avoid systemd specifier expansion.
-        ESCAPED_LAUNCHER="${LAUNCHER//\\/\\\\}"
-        ESCAPED_LAUNCHER="${ESCAPED_LAUNCHER//\"/\\\"}"
-        ESCAPED_LAUNCHER="${ESCAPED_LAUNCHER//%/%%}"
-        case "$ESCAPED_LAUNCHER" in
-            *$'\n'* | *$'\r'*) die "the project path is unsafe for a user unit" ;;
-        esac
+        mkdir -p "$LABWC_DIR" || die "could not create the Labwc directory"
+        chmod u+x "$LAUNCHER" || die "could not make the device launcher executable"
+        remove_managed_labwc_entry
+        remove_legacy_systemd_unit
+        QUOTED_LAUNCHER="$(shell_quote "$LAUNCHER")"
         {
-            printf '[Unit]\n'
-            printf 'Description=Nutri-Box Pi touchscreen UI\n'
-            printf 'After=graphical-session.target network-online.target\n'
-            printf 'Wants=network-online.target\n\n'
-            printf '[Service]\n'
-            printf 'Type=simple\n'
-            printf 'ExecStart="%s"\n' "$ESCAPED_LAUNCHER"
-            printf 'Restart=on-failure\n'
-            printf 'RestartSec=3\n\n'
-            printf '[Install]\n'
-            printf 'WantedBy=default.target\n'
-        } >"$UNIT_PATH" || die "could not write the user unit"
-        systemctl --user daemon-reload || die "could not reload user services"
-        systemctl --user enable --now "$UNIT_NAME" ||
-            die "could not enable the UI service"
-        printf 'Nutri-Box UI autostart is enabled.\n'
+            printf '%s\n' "$MANAGED_START"
+            printf '%s &\n' "$QUOTED_LAUNCHER"
+            printf '%s\n' "$MANAGED_END"
+        } >>"$AUTOSTART_PATH" || die "could not write the Labwc autostart entry"
+        printf 'Nutri-Box Labwc autostart is enabled.\n'
         ;;
     disable)
-        systemctl --user disable --now "$UNIT_NAME" >/dev/null 2>&1 || true
-        # `systemctl disable` follows the current [Install] section. Remove
-        # both known links explicitly so disable also cleans up older installs.
-        rm -f -- "$DEFAULT_WANTS_PATH" "$LEGACY_WANTS_PATH" ||
-            die "could not remove the UI service links"
-        rm -f -- "$UNIT_PATH" || die "could not remove the user unit"
-        systemctl --user daemon-reload || die "could not reload user services"
-        printf 'Nutri-Box UI autostart is disabled.\n'
+        [ ! -d "$LABWC_DIR" ] || remove_managed_labwc_entry
+        remove_legacy_systemd_unit
+        printf 'Nutri-Box Labwc autostart is disabled.\n'
         ;;
     *)
         die "usage: scripts/configure_ui_autostart.sh [enable|disable]"

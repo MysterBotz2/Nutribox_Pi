@@ -37,27 +37,31 @@ nutribox-pi ui
 Wayland session, validates configuration first, and takes a per-user runtime
 lock so a second UI process cannot start.
 
-For a reversible graphical-session autostart, run:
+NutriBox production autostart uses Labwc. Raspberry Pi OS **Desktop
+Autologin** must be enabled for the intended graphical user; without a desktop
+login, Labwc cannot run that user's autostart file. Enable the reversible entry
+with:
 
 ```bash
 scripts/configure_ui_autostart.sh enable
 ```
 
-This writes a user-level systemd unit under the invoking user's configuration
-directory and enables it from `default.target`, which is the reliable active
-Pi OS user target after reboot. The unit orders itself after the graphical and
-network-online targets; the launcher waits at most 30 seconds for the existing
-Wayland session before failing safely. It uses no sudo and does not hard-code a
-username, display number, backend URL, or credential. Disable it with
-`scripts/configure_ui_autostart.sh disable`; this also removes links created by
-older graphical-session-target installs. Restart and inspect safe service logs
-with:
+The command preserves unrelated Labwc autostart lines and adds one managed
+NutriBox launcher entry. It resolves the repository launcher when invoked,
+uses no sudo, and does not hard-code a username, display number, backend URL,
+or credential. It also disables and removes any obsolete NutriBox systemd user
+unit. The launcher waits at most 30 seconds for the existing Wayland session,
+then fails safely if the display is not ready; its per-user runtime lock still
+prevents duplicate UI processes. Disable the managed entry with:
 
 ```bash
-systemctl --user restart nutribox-pi-ui.service
-systemctl --user status nutribox-pi-ui.service
-journalctl --user -u nutribox-pi-ui.service
+scripts/configure_ui_autostart.sh disable
 ```
+
+For troubleshooting, first run `nutribox-pi ui` manually from the logged-in
+desktop user. Then review the Labwc session log using the Raspberry Pi OS
+desktop's normal session-log facilities; do not add a second UI launcher while
+the existing process lock reports one is active.
 
 ## Supported workflows and privacy
 
