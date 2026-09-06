@@ -292,6 +292,10 @@ def _run_loop(
                     _ingredient_candidates(workflow),
                     getattr(workflow, "save_enabled", False),
                     getattr(workflow, "leftover_record_enabled", False),
+                    getattr(workflow.leftovers, "has_selection", False),
+                    getattr(workflow, "leftover_shortcut_enabled", False),
+                    workflow.leftovers.selection_view.page > 0,
+                    workflow.leftovers.selection_view.has_next,
                 )
                 if pressed is not None or action is None:
                     continue
@@ -332,6 +336,10 @@ def _run_loop(
                     _ingredient_candidates(workflow),
                     getattr(workflow, "save_enabled", False),
                     getattr(workflow, "leftover_record_enabled", False),
+                    getattr(workflow.leftovers, "has_selection", False),
+                    getattr(workflow, "leftover_shortcut_enabled", False),
+                    workflow.leftovers.selection_view.page > 0,
+                    workflow.leftovers.selection_view.has_next,
                 )
                 is not active_press.action
             ):
@@ -553,7 +561,10 @@ def _apply_action(
     elif action is UIAction.RECORD_LEFTOVER_SCAN:
         workflow.record_leftover_scan()
     elif action is UIAction.ANALYZE_LEFTOVERS:
-        workflow.start_leftover_selection()
+        if workflow.leftover_shortcut_enabled:
+            workflow.start_saved_meal_leftover()
+        else:
+            workflow.start_leftover_selection()
     elif action in {
         UIAction.SELECT_SAVED_MEAL_0,
         UIAction.SELECT_SAVED_MEAL_1,
@@ -572,6 +583,8 @@ def _apply_action(
         workflow.next_saved_meal_page()
     elif action is UIAction.SAVED_MEAL_PREVIOUS:
         workflow.previous_saved_meal_page()
+    elif action is UIAction.LEFTOVER_CONTINUE:
+        workflow.continue_leftover_capture()
     elif action is UIAction.ANALYZE_AGAIN:
         if image_cache is not None:
             image_cache.clear()
@@ -696,6 +709,10 @@ def _render(
         _ingredient_candidates(workflow),
         getattr(workflow, "save_enabled", False),
         getattr(workflow, "leftover_record_enabled", False),
+        getattr(workflow.leftovers, "has_selection", False),
+        getattr(workflow, "leftover_shortcut_enabled", False),
+        workflow.leftovers.selection_view.page > 0,
+        workflow.leftovers.selection_view.has_next,
     ):
         button = _localized_button(button, workflow)
         _draw_button(pygame, screen, fonts.button, button, pressed is button.action)
@@ -759,6 +776,8 @@ def _localized_button(
         UIAction.EXIT: "exit",
         UIAction.PAIR_DEVICE: "pair",
         UIAction.PROFILE_SETTINGS: "profile_settings",
+        UIAction.PORTION_ANALYSIS: "portion_analysis",
+        UIAction.ANALYZE_LEFTOVERS: "analyze_leftovers",
         UIAction.UNPAIR: "unpair",
         UIAction.TOGGLE_THEME: "theme",
         UIAction.SETTINGS_DIAGNOSTICS: "diagnostics",
@@ -768,6 +787,9 @@ def _localized_button(
         UIAction.FOOD_PREVIOUS: "previous",
         UIAction.FOOD_NEXT: "next",
         UIAction.FOOD_CONTINUE: "continue_food",
+        UIAction.LEFTOVER_CONTINUE: "continue_food",
+        UIAction.SAVED_MEAL_PREVIOUS: "previous",
+        UIAction.SAVED_MEAL_NEXT: "next",
         UIAction.CONFIRM_INGREDIENTS: "confirm_ingredients",
         UIAction.RESCAN: "rescan",
         UIAction.COMPONENT_PREVIOUS: "previous_component",
@@ -781,6 +803,30 @@ def _localized_button(
         UIAction.NUTRITION_NEXT: "next",
     }
     key = keys.get(button.action)
+    saved_meal_actions = (
+        UIAction.SELECT_SAVED_MEAL_0,
+        UIAction.SELECT_SAVED_MEAL_1,
+        UIAction.SELECT_SAVED_MEAL_2,
+        UIAction.SELECT_SAVED_MEAL_3,
+    )
+    if button.action in saved_meal_actions:
+        index = saved_meal_actions.index(button.action)
+        view = workflow.leftovers.selection_view
+        if index >= len(view.names):
+            return ButtonLayout(
+                button.action, "", button.rectangle, button.role, enabled=False
+            )
+        label = (
+            f"{view.names[index]} · {view.timestamps[index]} · {view.weights[index]} g"
+        )
+        if view.selected_index == index:
+            label = f"{text(language, 'selected')}: {label}"
+        return ButtonLayout(
+            button.action,
+            label,
+            button.rectangle,
+            "primary" if view.selected_index == index else button.role,
+        )
     if button.action is UIAction.TOGGLE_INTRO:
         selected = (
             workflow.startup_shell.preferences.show_intro_on_startup
@@ -887,36 +933,37 @@ def _render_instruction(
 def _render_home(
     pygame: Any, screen: Any, fonts: _Fonts, workflow: MealCaptureWorkflow
 ) -> None:
-    _draw_brand_mark(pygame, screen, (400, 128))
     language = getattr(workflow, "language", Language.ENGLISH)
+    pairing = workflow.pairing
     heading_font = getattr(fonts, "subheading", fonts.heading)
     fitting_font = heading_font if hasattr(heading_font, "size") else fonts.small
+    greeting = text(language, "ready")
+    if pairing is not None and pairing.state is PairingState.PAIRED and pairing.device:
+        greeting = text(language, "paired_with").format(
+            name=pairing.device.owner_first_name
+        )
+    _draw_card(pygame, screen, (170, 72, 460, 52))
     _draw_text(
         screen,
-        heading_font,
-        _ellipsize(fitting_font, text(language, "ready"), 560),
-        (400, 205),
+        fitting_font,
+        _ellipsize(fitting_font, greeting, 420),
+        (400, 98),
         PRIMARY_TEXT,
     )
-    if workflow.pairing is not None and workflow.pairing.state is PairingState.PAIRED:
-        name = _ellipsize(fonts.small, workflow.pairing.device.owner_first_name, 240)
-        if workflow.pairing.greeting:
-            _draw_text(
-                screen,
-                fonts.small,
-                _ellipsize(fonts.small, workflow.pairing.greeting, 420),
-                (400, 404),
-                PRIMARY_TEXT,
-            )
-        _draw_text(
-            screen, fonts.small, f"Paired with {name}", (400, 430), SECONDARY_TEXT
-        )
-    elif workflow.pairing is not None and workflow.pairing.error_message:
+    if pairing is not None and pairing.error_message:
         _draw_text(
             screen,
             fonts.small,
-            workflow.pairing.error_message,
-            (400, 410),
+            pairing.error_message,
+            (400, 316),
+            SECONDARY_TEXT,
+        )
+    elif pairing is None or pairing.state is not PairingState.PAIRED:
+        _draw_text(
+            screen,
+            fonts.small,
+            _ellipsize(fonts.small, text(language, "pair_leftovers"), 420),
+            (400, 282),
             SECONDARY_TEXT,
         )
 
@@ -1008,13 +1055,26 @@ def _render_portion_analysis(
 def _render_saved_meal_selection(
     pygame: Any, screen: Any, fonts: _Fonts, workflow: MealCaptureWorkflow
 ) -> None:
-    _draw_text(screen, fonts.subheading, "Select Saved Meal", (400, 44), NUTRIBOX_BLUE)
-    view = workflow.leftovers.selection_view
+    language = workflow.language
+    _draw_text(
+        screen,
+        fonts.subheading,
+        text(language, "select_saved_meal"),
+        (400, 44),
+        NUTRIBOX_BLUE,
+    )
+    _draw_text(
+        screen,
+        fonts.small,
+        _ellipsize(fonts.small, text(language, "select_saved_meal_instruction"), 700),
+        (400, 76),
+        SECONDARY_TEXT,
+    )
     if workflow.leftovers.state is LeftoverState.EMPTY:
         _draw_text(
             screen,
             fonts.body,
-            "No saved meals are available.",
+            text(language, "no_saved_meals"),
             (400, 210),
             SECONDARY_TEXT,
         )
@@ -1023,27 +1083,19 @@ def _render_saved_meal_selection(
         _draw_text(
             screen,
             fonts.body,
-            "Saved meals are unavailable. Try again.",
+            _ellipsize(fonts.body, text(language, "saved_meals_unavailable"), 680),
             (400, 210),
             SECONDARY_TEXT,
         )
         return
-    for index, name in enumerate(view.names):
-        y = 119 + index * 58
-        _draw_text(
-            screen,
-            fonts.small,
-            _ellipsize(fonts.small, name, 400),
-            (395, y),
-            PRIMARY_TEXT,
-        )
-        _draw_text(
-            screen,
-            fonts.small,
-            f"{view.timestamps[index]} · {view.weights[index]} g",
-            (395, y + 19),
-            SECONDARY_TEXT,
-        )
+    view = workflow.leftovers.selection_view
+    _draw_text(
+        screen,
+        fonts.small,
+        text(language, "page").format(number=view.page + 1),
+        (400, 334),
+        SECONDARY_TEXT,
+    )
 
 
 def _render_leftover_summary(
@@ -1133,10 +1185,10 @@ def _render_capture(
     _draw_text(screen, fonts.body, text(language, "weight"), (669, 126), PRIMARY_TEXT)
     _draw_text(screen, fonts.small, "Measured at capture", (669, 174), SECONDARY_TEXT)
     if preview is not None:
-        target_size = tuple(preview.get_size())
+        target_size = scaled_image_size(tuple(preview.get_size()), (500, 320))
         left = 30 + (500 - target_size[0]) // 2
         top = 66 + (320 - target_size[1]) // 2
-        screen.blit(preview, (left, top))
+        screen.blit(pygame.transform.smoothscale(preview, target_size), (left, top))
     else:
         _draw_text(
             screen,
@@ -1185,8 +1237,8 @@ def _render_review(
     )
     _draw_text(
         screen,
-        fonts.body,
-        _ellipsize(fonts.body, text(language, "meal_clear"), 210),
+        fonts.small,
+        text(language, "meal_clear"),
         (670, 190),
         PRIMARY_TEXT,
     )
@@ -1870,13 +1922,19 @@ def _draw_button(
         button.rectangle.x + button.rectangle.width // 2,
         button.rectangle.y + button.rectangle.height // 2,
     )
-    _draw_text(
-        screen,
-        font,
-        _ellipsize(font, button.label, max(1, button.rectangle.width - 20)),
-        center,
-        text_color,
-    )
+    maximum_width = max(1, button.rectangle.width - 20)
+    if hasattr(font, "render") and font.size(button.label)[0] > maximum_width:
+        # Fixed action labels are never truncated. Scale only the rendered
+        # glyph surface to fit a touch target; this does not alter hit bounds.
+        label = font.render(button.label, True, text_color)
+        width, height = label.get_size()
+        target_height = max(1, round(height * maximum_width / width))
+        label = pygame.transform.smoothscale(label, (maximum_width, target_height))
+        screen.blit(
+            label, (center[0] - maximum_width // 2, center[1] - target_height // 2)
+        )
+    else:
+        _draw_text(screen, font, button.label, center, text_color)
 
 
 def _draw_text(

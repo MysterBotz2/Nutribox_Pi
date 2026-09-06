@@ -8,6 +8,7 @@ from nutribox_pi.adapters.mock_hardware import (
     SimulatedWeightSensor,
 )
 from nutribox_pi.adapters.simulated_camera import SimulatedCamera
+from nutribox_pi.continuation import SaveState
 from nutribox_pi.controller import NutriBoxController
 from nutribox_pi.device_ui import (
     MealCaptureWorkflow,
@@ -120,6 +121,115 @@ def test_portion_buttons_fit_800_by_480() -> None:
             assert rectangle.x >= 0 and rectangle.y >= 0
             assert rectangle.x + rectangle.width <= 800
             assert rectangle.y + rectangle.height <= 480
+
+
+def test_guest_portion_analysis_is_disabled_on_home_and_paired_is_enabled() -> None:
+    guest_button = next(
+        button
+        for button in buttons_for(UIScreen.HOME, PairingState.UNPAIRED)
+        if button.action is UIAction.PORTION_ANALYSIS
+    )
+    paired_button = next(
+        button
+        for button in buttons_for(UIScreen.HOME, PairingState.PAIRED)
+        if button.action is UIAction.PORTION_ANALYSIS
+    )
+    assert guest_button.enabled is False
+    assert (
+        action_at(
+            UIScreen.HOME,
+            guest_button.rectangle.center_x,
+            guest_button.rectangle.center_y,
+            PairingState.UNPAIRED,
+        )
+        is None
+    )
+    assert paired_button.enabled is True
+
+
+def test_saved_meal_selection_requires_a_row_before_continue() -> None:
+    before = next(
+        button
+        for button in buttons_for(UIScreen.SAVED_MEAL_SELECTION)
+        if button.action is UIAction.LEFTOVER_CONTINUE
+    )
+    after = next(
+        button
+        for button in buttons_for(
+            UIScreen.SAVED_MEAL_SELECTION, saved_meal_selected=True
+        )
+        if button.action is UIAction.LEFTOVER_CONTINUE
+    )
+    assert before.enabled is False
+    assert after.enabled is True
+
+
+def test_saved_meal_pagination_controls_require_an_adjacent_page() -> None:
+    disabled = buttons_for(UIScreen.SAVED_MEAL_SELECTION)
+    enabled = buttons_for(
+        UIScreen.SAVED_MEAL_SELECTION,
+        saved_meal_has_previous=True,
+        saved_meal_has_next=True,
+    )
+    for action in (UIAction.SAVED_MEAL_PREVIOUS, UIAction.SAVED_MEAL_NEXT):
+        assert (
+            next(button for button in disabled if button.action is action).enabled
+            is False
+        )
+        assert (
+            next(button for button in enabled if button.action is action).enabled
+            is True
+        )
+
+
+def test_home_and_saved_meal_controls_do_not_overlap() -> None:
+    for screen, pairing_state, selected in (
+        (UIScreen.HOME, PairingState.PAIRED, False),
+        (UIScreen.SAVED_MEAL_SELECTION, None, True),
+    ):
+        buttons = buttons_for(screen, pairing_state, saved_meal_selected=selected)
+        for index, first in enumerate(buttons):
+            for second in buttons[index + 1 :]:
+                assert not (
+                    first.rectangle.x < second.rectangle.x + second.rectangle.width
+                    and second.rectangle.x < first.rectangle.x + first.rectangle.width
+                    and first.rectangle.y < second.rectangle.y + second.rectangle.height
+                    and second.rectangle.y < first.rectangle.y + first.rectangle.height
+                ), (screen, first.action, second.action)
+
+
+def test_saved_meal_selection_continues_only_after_selection(tmp_path: Path) -> None:
+    workflow = _workflow(tmp_path, paired=True)
+    workflow.leftovers.select_saved_meal_id(7)
+    workflow.screen = UIScreen.SAVED_MEAL_SELECTION
+    workflow.continue_leftover_capture()
+    assert workflow.leftover_mode is True
+    assert workflow.screen is UIScreen.CAPTURE
+
+
+def test_saved_shortcut_requires_paired_analysis_and_starts_new_leftover_capture(
+    tmp_path: Path,
+) -> None:
+    workflow = _workflow(tmp_path, paired=True)
+    workflow.screen = UIScreen.CALCULATED
+    workflow._analysis_started_paired = True
+    workflow.continuation._save_state = SaveState.SAVED
+    workflow.continuation._saved_meal = SimpleNamespace(id=7)
+    assert workflow.leftover_shortcut_enabled is True
+    workflow.start_saved_meal_leftover()
+    assert workflow.leftover_mode is True
+    assert workflow.leftovers.selected_meal_id == 7
+    assert workflow.screen is UIScreen.CAPTURE
+
+
+def test_pairing_after_guest_analysis_does_not_enable_leftover_shortcut(
+    tmp_path: Path,
+) -> None:
+    workflow = _workflow(tmp_path, paired=True)
+    workflow.screen = UIScreen.CALCULATED
+    workflow.continuation._save_state = SaveState.SAVED
+    workflow.continuation._saved_meal = SimpleNamespace(id=7)
+    assert workflow.leftover_shortcut_enabled is False
 
 
 def test_portion_theme_uses_existing_ui_system() -> None:

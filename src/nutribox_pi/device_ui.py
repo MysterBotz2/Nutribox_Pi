@@ -184,6 +184,7 @@ class UIAction(StrEnum):
     SAVED_MEAL_NEXT = "saved_meal_next"
     SAVED_MEAL_PREVIOUS = "saved_meal_previous"
     RECORD_LEFTOVER_SCAN = "record_leftover_scan"
+    LEFTOVER_CONTINUE = "leftover_continue"
     UNPAIR = "unpair"
     CONFIRM_UNPAIR = "confirm_unpair"
     CANCEL_UNPAIR = "cancel_unpair"
@@ -314,6 +315,10 @@ def buttons_for(
     ingredient_candidates: IngredientCandidateView | None = None,
     save_enabled: bool = False,
     leftover_record_enabled: bool = False,
+    saved_meal_selected: bool = False,
+    leftover_shortcut_enabled: bool = False,
+    saved_meal_has_previous: bool = False,
+    saved_meal_has_next: bool = False,
 ) -> tuple[ButtonLayout, ...]:
     if screen is UIScreen.LOADING:
         return ()
@@ -345,19 +350,20 @@ def buttons_for(
             ButtonLayout(
                 UIAction.ANALYZE,
                 "Analyze Meal",
-                TouchRect(210, 110, 380, 56),
+                TouchRect(210, 140, 380, 56),
             ),
             ButtonLayout(
                 UIAction.PORTION_ANALYSIS,
                 "Portion Analysis",
-                TouchRect(210, 180, 380, 56),
+                TouchRect(210, 210, 380, 56),
                 "card",
+                pairing_state is PairingState.PAIRED,
             ),
             _home_pairing_button(pairing_state),
             ButtonLayout(
                 UIAction.PROFILE_SETTINGS,
                 "Profile & Settings",
-                TouchRect(24, 402, 270, 56),
+                TouchRect(210, 370, 380, 56),
                 "card",
             ),
             EXIT_BUTTON,
@@ -422,7 +428,7 @@ def buttons_for(
                 ButtonLayout(
                     action,
                     f"Meal {index + 1}",
-                    TouchRect(110, 94 + index * 58, 580, 50),
+                    TouchRect(80, 108 + index * 52, 640, 48),
                     "card",
                 )
                 for index, action in enumerate(
@@ -437,13 +443,24 @@ def buttons_for(
             ButtonLayout(
                 UIAction.SAVED_MEAL_PREVIOUS,
                 "Previous",
-                TouchRect(180, 380, 160, 56),
+                TouchRect(170, 360, 140, 52),
                 "card",
+                saved_meal_has_previous,
             ),
             ButtonLayout(
-                UIAction.SAVED_MEAL_NEXT, "Next", TouchRect(460, 380, 160, 56), "card"
+                UIAction.SAVED_MEAL_NEXT,
+                "Next",
+                TouchRect(490, 360, 140, 52),
+                "card",
+                saved_meal_has_next,
             ),
-            ButtonLayout(UIAction.HOME, "Home", TouchRect(24, 408, 128, 48), "card"),
+            ButtonLayout(UIAction.BACK, "Back", TouchRect(24, 420, 128, 48), "card"),
+            ButtonLayout(
+                UIAction.LEFTOVER_CONTINUE,
+                "Continue",
+                TouchRect(320, 360, 160, 52),
+                enabled=saved_meal_selected,
+            ),
             EXIT_BUTTON,
         )
     if screen is UIScreen.LEFTOVER_SUMMARY:
@@ -500,7 +517,10 @@ def buttons_for(
         )
     if screen is UIScreen.CALCULATED:
         return _calculated_buttons(
-            nutrition_view or NutritionView(), save_enabled, leftover_record_enabled
+            nutrition_view or NutritionView(),
+            save_enabled,
+            leftover_record_enabled,
+            leftover_shortcut_enabled,
         )
     if screen is UIScreen.FOOD_SELECTION:
         return _food_selection_buttons(
@@ -625,6 +645,7 @@ def _calculated_buttons(
     view: NutritionView,
     save_enabled: bool = False,
     leftover_record_enabled: bool = False,
+    leftover_shortcut_enabled: bool = False,
 ) -> tuple[ButtonLayout, ...]:
     tab_actions = (
         UIAction.NUTRITION_OVERVIEW,
@@ -677,6 +698,18 @@ def _calculated_buttons(
             ButtonLayout(
                 UIAction.RECORD_LEFTOVER_SCAN,
                 "Record Leftover Scan",
+                TouchRect(260, 400, 160, 60),
+            ),
+            *actions[3:],
+        )
+    if leftover_shortcut_enabled:
+        return tabs + (
+            actions[0],
+            actions[1],
+            actions[2],
+            ButtonLayout(
+                UIAction.ANALYZE_LEFTOVERS,
+                "Analyze Leftovers",
                 TouchRect(260, 400, 160, 60),
             ),
             *actions[3:],
@@ -943,7 +976,7 @@ def _home_pairing_button(pairing_state: PairingState | None) -> ButtonLayout:
         return ButtonLayout(
             UIAction.PAIR_DEVICE,
             "Device paired",
-            TouchRect(210, 330, 380, 58),
+            TouchRect(210, 300, 380, 56),
             "card",
             enabled=False,
         )
@@ -951,12 +984,12 @@ def _home_pairing_button(pairing_state: PairingState | None) -> ButtonLayout:
         return ButtonLayout(
             UIAction.PAIR_DEVICE,
             "Checking device...",
-            TouchRect(210, 330, 380, 58),
+            TouchRect(210, 300, 380, 56),
             "card",
             enabled=False,
         )
     return ButtonLayout(
-        UIAction.PAIR_DEVICE, "Pair Device", TouchRect(210, 330, 380, 58), "card"
+        UIAction.PAIR_DEVICE, "Pair Device", TouchRect(210, 300, 380, 56), "card"
     )
 
 
@@ -971,6 +1004,10 @@ def action_at(
     ingredient_candidates: IngredientCandidateView | None = None,
     save_enabled: bool = False,
     leftover_record_enabled: bool = False,
+    saved_meal_selected: bool = False,
+    leftover_shortcut_enabled: bool = False,
+    saved_meal_has_previous: bool = False,
+    saved_meal_has_next: bool = False,
 ) -> UIAction | None:
     for button in buttons_for(
         screen,
@@ -981,6 +1018,10 @@ def action_at(
         ingredient_candidates,
         save_enabled,
         leftover_record_enabled,
+        saved_meal_selected,
+        leftover_shortcut_enabled,
+        saved_meal_has_previous,
+        saved_meal_has_next,
     ):
         if button.enabled and button.rectangle.contains(x, y):
             return button.action
@@ -1162,9 +1203,14 @@ class MealCaptureWorkflow:
             self.screen = UIScreen.SAVED_MEAL_SELECTION
 
     def select_saved_meal(self, ordinal: int) -> None:
-        if self.leftovers.select(ordinal):
-            self.leftover_mode = True
-            self.analyze()
+        self.leftovers.select(ordinal)
+
+    def continue_leftover_capture(self) -> None:
+        if not self.leftovers.has_selection:
+            return
+        self.leftover_mode = True
+        self._clear_analysis_state()
+        self.analyze()
 
     def next_saved_meal_page(self) -> None:
         view = self.leftovers.selection_view
@@ -1199,6 +1245,30 @@ class MealCaptureWorkflow:
             if self.pairing is not None:
                 self.pairing.confirm_revocation()
             self.home()
+
+    @property
+    def leftover_shortcut_enabled(self) -> bool:
+        saved = self.continuation.saved_meal
+        return (
+            self.screen is UIScreen.CALCULATED
+            and not self.leftover_mode
+            and self._analysis_started_paired
+            and self._paired_and_verified()
+            and self.continuation.save_state is SaveState.SAVED
+            and isinstance(getattr(saved, "id", None), int)
+            and saved.id > 0
+        )
+
+    def start_saved_meal_leftover(self) -> None:
+        saved = self.continuation.saved_meal
+        meal_id = getattr(saved, "id", None)
+        if not self.leftover_shortcut_enabled or not isinstance(meal_id, int):
+            return
+        self.leftovers.clear()
+        self.leftovers.select_saved_meal_id(meal_id)
+        self.leftover_mode = True
+        self._clear_analysis_state()
+        self.analyze()
 
     def settings_back(self) -> None:
         self.settings_message = None
@@ -1623,6 +1693,10 @@ class MealCaptureWorkflow:
         self._start_preview()
 
     def back(self) -> None:
+        if self.screen is UIScreen.SAVED_MEAL_SELECTION:
+            self.leftovers.clear()
+            self.screen = UIScreen.HOME
+            return
         if (
             self.screen in {UIScreen.HOME, UIScreen.INSTRUCTION}
             and self.startup_shell is not None

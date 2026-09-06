@@ -30,6 +30,7 @@ class SavedMealSelectionView:
     weights: tuple[str, ...]
     page: int
     has_next: bool
+    selected_index: int | None
 
 
 class LeftoverWorkflow:
@@ -50,6 +51,10 @@ class LeftoverWorkflow:
         return self._selected_meal_id
 
     @property
+    def has_selection(self) -> bool:
+        return self._selected_meal_id is not None
+
+    @property
     def summary(self) -> LeftoverScanResponse | None:
         return self._summary
 
@@ -57,14 +62,22 @@ class LeftoverWorkflow:
     def selection_view(self) -> SavedMealSelectionView:
         page = self._page
         if page is None:
-            return SavedMealSelectionView((), (), (), 0, False)
-        meals = page.meals
+            return SavedMealSelectionView((), (), (), 0, False, None)
+        meals = page.meals[: self.page_size]
         return SavedMealSelectionView(
             tuple(" · ".join(meal.food_names) for meal in meals),
             tuple(meal.recorded_at.date().isoformat() for meal in meals),
             tuple(meal.weight_grams for meal in meals),
             page.offset // self.page_size,
-            len(meals) == self.page_size,
+            len(page.meals) > self.page_size,
+            next(
+                (
+                    index
+                    for index, meal in enumerate(meals)
+                    if meal.id == self._selected_meal_id
+                ),
+                None,
+            ),
         )
 
     def open(self, paired: bool) -> None:
@@ -80,7 +93,9 @@ class LeftoverWorkflow:
     def load(self, offset: int) -> None:
         self.state = LeftoverState.LOADING
         try:
-            page = self._controller.list_saved_meals(self.page_size, offset)
+            # One extra row is a private pagination lookahead.  It prevents the
+            # renderer from offering Next when no further saved meal exists.
+            page = self._controller.list_saved_meals(self.page_size + 1, offset)
         except DeviceAuthenticationFailure:
             self._clear(LeftoverState.REVOKED)
         except RetryableBackendFailure:
@@ -99,9 +114,15 @@ class LeftoverWorkflow:
             return False
         if isinstance(ordinal, bool) or not isinstance(ordinal, int):
             return False
-        if not 0 <= ordinal < len(page.meals):
+        if not 0 <= ordinal < min(len(page.meals), self.page_size):
             return False
         self._selected_meal_id = page.meals[ordinal].id
+        return True
+
+    def select_saved_meal_id(self, meal_id: int) -> bool:
+        if isinstance(meal_id, bool) or not isinstance(meal_id, int) or meal_id <= 0:
+            return False
+        self._selected_meal_id = meal_id
         return True
 
     def record(self, analysis_session_id: int) -> None:

@@ -77,6 +77,8 @@ STRINGS = {
         "pair": "Pair Device",
         "checking": "Checking device...",
         "paired": "Device paired",
+        "paired_with": "Paired with {name}",
+        "pair_leftovers": "Pair device to analyze leftovers",
         "instructions": "Instructions",
         "skip": "Skip",
         "media_unavailable": "Instructional video is not installed.",
@@ -158,6 +160,12 @@ STRINGS = {
         "theme": "Theme",
         "diagnostics": "Diagnostics",
         "portion_analysis": "Portion Analysis",
+        "select_saved_meal": "Select Saved Meal",
+        "select_saved_meal_instruction": "Select a saved meal to scan its leftovers.",
+        "no_saved_meals": "No saved meals are available.",
+        "saved_meals_unavailable": "Saved meals are unavailable. Try again.",
+        "page": "Page {number}",
+        "selected": "Selected",
         "leftover_scan": "Leftover scan",
         "portion_explanation": (
             "This feature compares the saved meal with its remaining portion."
@@ -182,6 +190,8 @@ STRINGS = {
         "pair": "Ikonekta ang Device",
         "checking": "Sinusuri ang device...",
         "paired": "Nakonekta ang device",
+        "paired_with": "Nakapares kay {name}",
+        "pair_leftovers": "I-pair ang device para suriin ang natira.",
         "instructions": "Mga Tagubilin",
         "skip": "Magpatuloy",
         "media_unavailable": "Hindi naka-install ang instructional video.",
@@ -263,6 +273,16 @@ STRINGS = {
         "theme": "Tema",
         "diagnostics": "Diagnostics",
         "portion_analysis": "Pagsusuri ng Porsyon",
+        "select_saved_meal": "Pumili ng Naka-save na Pagkain",
+        "select_saved_meal_instruction": (
+            "Pumili ng naka-save na pagkain para suriin ang natira."
+        ),
+        "no_saved_meals": "Walang naka-save na pagkain.",
+        "saved_meals_unavailable": (
+            "Hindi available ang mga naka-save na pagkain. Subukan muli."
+        ),
+        "page": "Pahina {number}",
+        "selected": "Napili",
         "leftover_scan": "Pagsusuri ng natitirang pagkain",
         "portion_explanation": (
             "Ang feature na ito ay naghahambing ng naka-save na pagkain sa "

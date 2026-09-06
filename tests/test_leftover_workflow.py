@@ -27,7 +27,7 @@ class _Controller:
     def list_saved_meals(self, limit: int, offset: int) -> SavedMealPage:
         if self.failure:
             raise self.failure
-        assert (limit, offset) == (4, 0)
+        assert (limit, offset) == (5, 0)
         return self.page
 
     def create_leftover_scan(
@@ -83,3 +83,26 @@ def test_retryable_failure_retains_no_unsafe_state_and_revocation_clears() -> No
     assert workflow.state is LeftoverState.REVOKED
     assert workflow.selected_meal_id is None
     assert workflow.summary is None
+
+
+def test_saved_meal_page_uses_a_private_lookahead_for_pagination() -> None:
+    controller = _Controller()
+    workflow = LeftoverWorkflow(controller)  # type: ignore[arg-type]
+    workflow._page = SavedMealPage(
+        tuple(
+            SavedMealListItem(
+                index,
+                datetime.now(UTC),
+                (f"Meal {index}",),
+                "120",
+            )
+            for index in range(1, 6)
+        ),
+        5,
+        0,
+    )
+    workflow.state = LeftoverState.SELECTING
+    view = workflow.selection_view
+    assert len(view.names) == 4
+    assert view.has_next is True
+    assert workflow.select(4) is False

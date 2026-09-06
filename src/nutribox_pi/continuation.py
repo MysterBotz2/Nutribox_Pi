@@ -109,6 +109,11 @@ class MealAnalysisContinuationWorkflow:
         self._save_future: Future[object] | None = None
         self._pending_save_generation: int | None = None
         self._save_permitted = False
+        self._saved_meal: object | None = None
+
+    @property
+    def saved_meal(self) -> object | None:
+        return self._saved_meal
 
     @property
     def save_state(self) -> SaveState:
@@ -382,7 +387,7 @@ class MealAnalysisContinuationWorkflow:
             if save_generation != self._save_generation or self._closed:
                 return
             try:
-                save_future.result()
+                self._saved_meal = save_future.result()
             except DeviceAuthenticationFailure:
                 self.revoke()
             except RetryableBackendFailure:
@@ -586,6 +591,7 @@ class MealAnalysisContinuationWorkflow:
         self._error_message = None
         self._state = ContinuationState.IDLE
         self._save_state = SaveState.UNAVAILABLE
+        self._saved_meal = None
         self._save_generation += 1
         self._save_permitted = False
         save_future = self._save_future
