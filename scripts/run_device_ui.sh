@@ -11,6 +11,8 @@ PROJECT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)" ||
     die "could not resolve the project directory"
 VENV_PYTHON="$PROJECT_DIR/.venv-pi/bin/python"
 ENV_FILE="$PROJECT_DIR/.env"
+READY_TIMEOUT_SECONDS=30
+READY_POLL_SECONDS=1
 
 [ -x "$VENV_PYTHON" ] ||
     die ".venv-pi is missing or has no usable interpreter"
@@ -30,32 +32,45 @@ fi
 "$VENV_PYTHON" -m nutribox_pi preflight >/dev/null 2>&1 ||
     die "device configuration is invalid"
 
-if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
-    RUNTIME_CANDIDATE="/run/user/$(id -u)"
-    if [ -d "$RUNTIME_CANDIDATE" ] && [ -O "$RUNTIME_CANDIDATE" ]; then
-        XDG_RUNTIME_DIR="$RUNTIME_CANDIDATE"
-        export XDG_RUNTIME_DIR
-    fi
-fi
+wait_for_wayland_session() {
+    READY_ELAPSED=0
+    while [ "$READY_ELAPSED" -lt "$READY_TIMEOUT_SECONDS" ]; do
+        if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+            RUNTIME_CANDIDATE="/run/user/$(id -u)"
+            if [ -d "$RUNTIME_CANDIDATE" ] && [ -O "$RUNTIME_CANDIDATE" ]; then
+                XDG_RUNTIME_DIR="$RUNTIME_CANDIDATE"
+                export XDG_RUNTIME_DIR
+            fi
+        fi
+
+        if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -d "$XDG_RUNTIME_DIR" ] &&
+            [ -O "$XDG_RUNTIME_DIR" ]; then
+            if [ -n "${WAYLAND_DISPLAY:-}" ] &&
+                [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; then
+                return 0
+            fi
+            if [ -z "${WAYLAND_DISPLAY:-}" ]; then
+                for CANDIDATE in "$XDG_RUNTIME_DIR"/wayland-*; do
+                    if [ -S "$CANDIDATE" ]; then
+                        WAYLAND_DISPLAY="${CANDIDATE##*/}"
+                        export WAYLAND_DISPLAY
+                        SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-wayland}"
+                        export SDL_VIDEODRIVER
+                        return 0
+                    fi
+                done
+            fi
+        fi
+
+        sleep "$READY_POLL_SECONDS"
+        READY_ELAPSED=$((READY_ELAPSED + READY_POLL_SECONDS))
+    done
+    return 1
+}
 
 if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ]; then
-    [ -n "${XDG_RUNTIME_DIR:-}" ] ||
-        die "no graphical session is available for this user"
-    [ -d "$XDG_RUNTIME_DIR" ] && [ -O "$XDG_RUNTIME_DIR" ] ||
-        die "the graphical runtime directory is unavailable or unsafe"
-    WAYLAND_SOCKET=""
-    for CANDIDATE in "$XDG_RUNTIME_DIR"/wayland-*; do
-        if [ -S "$CANDIDATE" ]; then
-            WAYLAND_SOCKET="$CANDIDATE"
-            break
-        fi
-    done
-    [ -n "$WAYLAND_SOCKET" ] ||
-        die "no Wayland session socket is available for this user"
-    WAYLAND_DISPLAY="${WAYLAND_SOCKET##*/}"
-    export WAYLAND_DISPLAY
-    SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-wayland}"
-    export SDL_VIDEODRIVER
+    wait_for_wayland_session ||
+        die "the graphical session did not become ready before the timeout"
 fi
 
 if [ -n "${WAYLAND_DISPLAY:-}" ]; then

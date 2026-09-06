@@ -44,10 +44,14 @@ scripts/configure_ui_autostart.sh enable
 ```
 
 This writes a user-level systemd unit under the invoking user's configuration
-directory and starts it after `graphical-session.target`. It uses no sudo and
-does not hard-code a username, display number, backend URL, or credential.
-Disable it with `scripts/configure_ui_autostart.sh disable`. Restart and inspect
-safe service logs with:
+directory and enables it from `default.target`, which is the reliable active
+Pi OS user target after reboot. The unit orders itself after the graphical and
+network-online targets; the launcher waits at most 30 seconds for the existing
+Wayland session before failing safely. It uses no sudo and does not hard-code a
+username, display number, backend URL, or credential. Disable it with
+`scripts/configure_ui_autostart.sh disable`; this also removes links created by
+older graphical-session-target installs. Restart and inspect safe service logs
+with:
 
 ```bash
 systemctl --user restart nutribox-pi-ui.service
